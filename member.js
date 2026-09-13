@@ -31,11 +31,14 @@ submit($('resetPasswordForm'),async d=>{confirmPassword(d);await api('/api/membe
 submit($('profileForm'),async d=>{const result=await api('/api/member','PATCH',d);member=result.member;$('welcome').textContent=`${member.name}，您好`;message('會員資料已儲存');});
 submit($('passwordForm'),async d=>{confirmPassword(d);await api('/api/member/password','POST',d);showAuth();tab(false);message('密碼已更新，請重新登入。');});
 $('logout').addEventListener('click',async()=>{try{await api('/api/member/logout','POST',{});showAuth();tab(false);message('已安全登出');}catch(e){message(e.message,true);}});
-const states={test_paid:'測試付款成功（未實際收款）',payment_failed:'測試付款失敗',pending:'待確認',confirmed:'已確認',paid:'已付款',shipped:'已出貨',completed:'已完成',cancelled:'已取消'};
+const states={expired:'付款期限已過，庫存已釋放',test_paid:'測試付款成功（未實際收款）',payment_failed:'測試付款失敗',pending:'待確認',confirmed:'已確認',paid:'已付款',shipped:'已出貨',completed:'已完成',cancelled:'已取消'};
 const payments={ecpay:'綠界信用卡（測試）',bank:'銀行轉帳',card:'信用卡',linepay:'LINE Pay'};
 function node(tag,text,className){const el=document.createElement(tag);el.textContent=text;if(className)el.className=className;return el;}
 function orderCard(order){
-  const card=node('article','','order');card.append(node('h3',order.order_number),node('span',states[order.status]||'處理中','status'));
+  const card=node('article','','order');
+  if(order.reservation_state==='held')card.append(node('p','商品保留至 '+new Date(order.reserved_until).toLocaleString('zh-TW')+'，請於期限內開始付款。','hint'));
+  if(order.reservation_state==='paying')card.append(node('p',order.payment==='bank'?'匯款須於三天內完成並回報；已回報的訂單會保留庫存等待對帳。':'付款結果確認中，庫存持續保留；若已付款，系統會定期查詢結果，請勿另建訂單重複付款。','hint'));
+card.append(node('h3',order.order_number),node('span',states[order.status]||'處理中','status'));
   const date=new Date(order.created_at);card.append(node('p',Number.isFinite(date.getTime())?date.toLocaleString('zh-TW'):'','hint'));
   let items=[];try{items=JSON.parse(order.items);}catch{}const list=document.createElement('ul');
   for(const item of items)list.append(node('li',`${item.product}${item.nib?' · '+item.nib:''} × ${item.quantity}`));

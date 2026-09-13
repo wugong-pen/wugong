@@ -26,31 +26,5 @@ export function quote(items){
   });
   return {items:result,total:result.reduce((sum,i)=>sum+i.price*i.quantity,0),shippingFee:0,currency:'TWD'};
 }
-export function paymentForm(order,env){
-  sandbox(env);
-  if(!/^WG[a-f0-9]{18}$/.test(order.order_number)||order.payment!=='ecpay'||order.status!=='pending')abort(409,'此訂單無法再次付款，請查看購買紀錄');
-  const origin=env.PAYMENT_ORIGIN;
-  if(origin!=='https://wugong-test.wugong-pen.workers.dev')abort(503,'測試付款網址尚未設定');
-  const date=new Date(new Date(order.created_at).getTime()+8*3600000).toISOString().slice(0,19).replace(/-/g,'/').replace('T',' ');
-  const fields={MerchantID:merchant,MerchantTradeNo:order.order_number,MerchantTradeDate:date,PaymentType:'aio',TotalAmount:String(order.total),TradeDesc:'WUGONG test order',ItemName:'WUGONG 測試商品',ReturnURL:origin+'/api/payments/ecpay/notify',ChoosePayment:'Credit',EncryptType:'1',ClientBackURL:origin+'/member.html'};
-  fields.CheckMacValue=checkMac(fields);return{action:ENDPOINT,fields};
-}
-export async function notify(request,env){
-  sandbox(env);
-  const reject=()=>new Response('0|Invalid notification',{status:400});
-  if(request.method!=='POST'||!request.headers.get('Content-Type')?.startsWith('application/x-www-form-urlencoded'))return reject();
-  const raw=await request.text();if(raw.length>16384)return reject();
-  const entries=[...new URLSearchParams(raw)];if(new Set(entries.map(e=>e[0].toLowerCase())).size!==entries.length)return reject();
-  const p=Object.fromEntries(entries),expected=checkMac(p);
-  if(!/^[A-F0-9]{64}$/.test(p.CheckMacValue||'')||!timingSafeEqual(Buffer.from(expected),Buffer.from(p.CheckMacValue)))return reject();
-  if(p.MerchantID!==merchant||!/^WG[a-f0-9]{18}$/.test(p.MerchantTradeNo||'')||!/^\d+$/.test(p.TradeAmt||'')||!['0','1'].includes(p.SimulatePaid)||!/^\d+$/.test(p.RtnCode||''))return reject();
-  const order=await env.DB.prepare("SELECT total,status FROM orders WHERE order_number=? AND payment='ecpay'").bind(p.MerchantTradeNo).first();
-  if(!order||Number(p.TradeAmt)!==order.total)return reject();
-  // Console simulation is only an acknowledgement test, never evidence of payment.
-  if(p.SimulatePaid==='1')return new Response('1|OK');
-  if(p.RtnCode==='1'){
-    if(!p.TradeNo||!p.PaymentType?.startsWith('Credit'))return reject();
-    await env.DB.prepare("UPDATE orders SET status='test_paid' WHERE order_number=? AND payment='ecpay' AND status IN ('pending','payment_failed')").bind(p.MerchantTradeNo).run();
-  }else await env.DB.prepare("UPDATE orders SET status='payment_failed' WHERE order_number=? AND payment='ecpay' AND status='pending'").bind(p.MerchantTradeNo).run();
-  return new Response('1|OK');
-}
+export function paymentForm(){abort(503,'信用卡測試付款暫停，請使用銀行匯款或海外 PayPal 測試');}
+export async function notify(){return new Response('0|Payment integration disabled',{status:503});}

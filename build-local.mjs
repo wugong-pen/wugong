@@ -1,0 +1,3 @@
+import {createRequire} from 'node:module';import fs from 'node:fs';import path from 'node:path';
+const require=createRequire(import.meta.url);const esbuild=require(require.resolve('esbuild',{paths:[require.resolve('wrangler')]}));
+await esbuild.build({stdin:{contents:fs.readFileSync('worker.js','utf8'),resolveDir:process.cwd(),sourcefile:'worker.js',loader:'js'},bundle:true,write:true,outfile:'.build/worker.js',platform:'neutral',format:'esm',plugins:[{name:'workspace-modules',setup(b){b.onResolve({filter:/^node:/},a=>({path:a.path,external:true}));b.onResolve({filter:/^\.\//},a=>({path:path.resolve(process.cwd(),a.path),namespace:'workspace'}));b.onLoad({filter:/.*/,namespace:'workspace'},a=>({contents:fs.readFileSync(a.path,'utf8'),loader:'js'}));}}]});

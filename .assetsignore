@@ -22,3 +22,7 @@ ecpay.js
 PAYMENTS.md
 
 payments.js
+
+inventory.js
+CHECKOUT.md
+build-local.mjs

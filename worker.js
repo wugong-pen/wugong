@@ -1,4 +1,5 @@
-import {methods,start,confirm} from './payments.js';
+import {expireReservations,checkStock,reserveStatements} from './inventory.js';
+import {methods,start,confirm,reconcilePayments} from './payments.js';
 import {quote,paymentForm,notify,sandbox} from './ecpay.js';
 import { scrypt, timingSafeEqual } from 'node:crypto';
 import { COUNTRY_CODES } from './countries.js';
@@ -171,8 +172,8 @@ async function api(request,env,url,ctx) {
     return json({success:true},200,{'Set-Cookie':cookie('',0)});
   }
   if((path==='/api/member/orders'||path.startsWith('/api/member/orders/'))&&method==='GET') {
-    const m=await session(request,env);
-    const base='SELECT o.order_number,o.customer_name,o.phone,o.email,o.address,o.shipping,o.payment,o.note,o.items,o.total,o.status,o.created_at,mo.shipping_country FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE mo.member_id=?';
+    const m=await session(request,env);await expireReservations(env);
+    const base='SELECT o.order_number,o.customer_name,o.phone,o.email,o.address,o.shipping,o.payment,o.note,o.items,o.total,o.status,o.created_at,mo.shipping_country,(SELECT state FROM checkout_reservations WHERE order_number=o.order_number) AS reservation_state,(SELECT expires_at FROM checkout_reservations WHERE order_number=o.order_number) AS reserved_until FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE mo.member_id=?';
     if(path!=='/api/member/orders') {
       const order=await env.DB.prepare(base+' AND o.order_number=?').bind(m.id,decodeURIComponent(path.slice('/api/member/orders/'.length))).first();
       if(!order)fail(404,'找不到此訂單');return json({success:true,order});
@@ -192,11 +193,11 @@ async function api(request,env,url,ctx) {
     if(!/^\d{5}$/.test(data.last5||'')||!/^\d{4}-\d{2}-\d{2}$/.test(data.date||''))fail(400,'請輸入匯款帳號末五碼與日期');
     const stamp=Date.parse(data.date+'T00:00:00+08:00');
     if(!Number.isFinite(stamp)||data.date>new Date(Date.now()+8*3600000).toISOString().slice(0,10)||data.date<new Date(Date.parse(order.created_at)+8*3600000).toISOString().slice(0,10))fail(400,'請確認匯款日期');
-    const result=await env.DB.prepare("UPDATE payment_attempts SET remittance_last5=?,remittance_date=?,reported_at=? WHERE order_number=? AND provider='bank' AND due_at>?").bind(data.last5,data.date,new Date().toISOString(),order.order_number,new Date().toISOString()).run();
+    const result=await env.DB.prepare("UPDATE payment_attempts SET remittance_last5=?,remittance_date=?,reported_at=? WHERE order_number=? AND provider='bank' AND due_at>? AND EXISTS(SELECT 1 FROM checkout_reservations r WHERE r.order_number=payment_attempts.order_number AND r.state='paying')").bind(data.last5,data.date,new Date().toISOString(),order.order_number,new Date().toISOString()).run();
     if(!result.meta.changes)fail(409,'匯款期限已過或尚未取得匯款資料');
     return json({success:true,message:'已收到回報，待人工核對；回報不代表付款完成'});
   }
-  if(path==='/api/checkout/quote'&&method==='POST'){await session(request,env);sandbox(env);return json({success:true,...quote((await body(request)).items)});}
+  if(path==='/api/checkout/quote'&&method==='POST'){await session(request,env);sandbox(env);await expireReservations(env);const q=quote((await body(request)).items);await checkStock(env,q.items);return json({success:true,...q});}
   if(path==='/api/payments/ecpay/start'&&method==='POST'){
     const m=await session(request,env);sandbox(env);const data=await body(request);
     const order=await env.DB.prepare('SELECT o.* FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE o.order_number=? AND mo.member_id=?').bind(text(data.orderNumber,60,'訂單編號'),m.id).first();
@@ -211,19 +212,22 @@ async function api(request,env,url,ctx) {
     const name=text(c.name,100,'收件人姓名'),phone=text(c.phone,40,'電話'),address=text(c.address,500,'收件地址');
     if(!COUNTRY_CODES.includes(c.country))fail(400,'請選擇收件國家／地區');
     sandbox(env);
+    await expireReservations(env);
     const {items,total}=quote(order.items),number='WG'+random().slice(0,18);
     const shipping=text(order.shipping??'',40,'配送方式',false),payment=text(order.payment,30,'付款方式'),note=text(order.note??'',1000,'備註',false);
     if(methods(env,c.country)[payment]!==true)fail(400,'此付款方式尚未設定或不適用收件國家');
     if(order.expectedTotal!==total)fail(409,'商品金額已更新，請重新整理後確認');
     try{await env.DB.batch([
       env.DB.prepare('INSERT INTO orders(order_number,customer_name,phone,email,address,shipping,payment,note,items,total,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(number,name,phone,m.email,address,shipping,payment,note,JSON.stringify(items),total,'pending',new Date().toISOString()),
-      env.DB.prepare('INSERT INTO member_orders(order_number,member_id,shipping_country,request_key) VALUES (?,?,?,?)').bind(number,m.id,c.country,key)
-    ]);}catch(error){const retry=await env.DB.prepare('SELECT order_number FROM member_orders WHERE member_id=? AND request_key=?').bind(m.id,key).first();if(!retry)throw error;return json({success:true,orderNumber:retry.order_number});}
+      env.DB.prepare('INSERT INTO member_orders(order_number,member_id,shipping_country,request_key) VALUES (?,?,?,?)').bind(number,m.id,c.country,key),
+      ...reserveStatements(env,number,items,payment)
+    ]);}catch(error){const retry=await env.DB.prepare('SELECT order_number FROM member_orders WHERE member_id=? AND request_key=?').bind(m.id,key).first();if(!retry){if(error.message?.includes('CHECK constraint failed: quantity'))fail(409,'商品庫存不足，請調整數量後再試');throw error;}return json({success:true,orderNumber:retry.order_number});}
     return json({success:true,orderNumber:number});
   }
   fail(404,'找不到此功能');
 }
 export default {
+  async scheduled(event,env){if(env.APP_ENV==='staging'){await expireReservations(env);await reconcilePayments(env);}},
   async fetch(request,env,ctx) {
     const url=new URL(request.url);
     try{

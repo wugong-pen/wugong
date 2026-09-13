@@ -1,10 +1,11 @@
+import {lockPayment,settlePayment} from './inventory.js';
 import {createHmac} from 'node:crypto';
 import {sandbox} from './ecpay.js';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 const origin='https://wugong-test.wugong-pen.workers.dev';
 export function methods(env,country){
  const test=env.APP_ENV==='staging';
- return {ecpay:test&&country==='TW',bank:test&&country==='TW'&&!!bankConfig(env),linepay:test&&country==='TW'&&!!(env.LINEPAY_SANDBOX_CHANNEL_ID&&env.LINEPAY_SANDBOX_CHANNEL_SECRET),paypal:test&&['JP','KR','US','SG'].includes(country)&&!!(env.PAYPAL_SANDBOX_CLIENT_ID&&env.PAYPAL_SANDBOX_CLIENT_SECRET)};
+ return {ecpay:false,bank:test&&country==='TW'&&!!bankConfig(env),linepay:false,paypal:test&&['JP','KR','US','SG'].includes(country)&&!!(env.PAYPAL_SANDBOX_CLIENT_ID&&env.PAYPAL_SANDBOX_CLIENT_SECRET)};
 }
 export function bankConfig(env){
  try{const b=JSON.parse(env.BANK_TEST_CONFIG||'null');return b&&['bank','code','branch','holder','account'].every(k=>typeof b[k]==='string'&&b[k].trim())&&Number.isInteger(b.days)&&b.days>=1&&b.days<=30?b:null;}catch{return null;}
@@ -29,8 +30,9 @@ export async function start(order,env){
  sandbox(env);if(env.PAYMENT_ORIGIN!==origin)fail(503,'測試付款網址尚未設定');
  if(methods(env,order.shipping_country)[order.payment]!==true)fail(503,'此付款方式尚未設定或不適用收件國家');
  if(order.status!=='pending')fail(409,'請查看訂單付款狀態');
+ await lockPayment(env,order.order_number);
  let p=await env.DB.prepare('SELECT * FROM payment_attempts WHERE order_number=?').bind(order.order_number).first();
- if(p){if(p.redirect_url)return {redirect:p.redirect_url};if(p.bank_details)return {bank:JSON.parse(p.bank_details),dueAt:p.due_at};fail(409,'付款請求處理中或結果待確認，請勿重複建立付款');}
+ if(p){if(p.due_at&&p.due_at<=new Date().toISOString())fail(409,'匯款期限已過，請查看訂單狀態');if(p.redirect_url)return {redirect:p.redirect_url};if(p.bank_details)return {bank:JSON.parse(p.bank_details),dueAt:p.due_at};fail(409,'付款請求處理中或結果待確認，請勿重複建立付款');}
  const state=crypto.randomUUID(),b=order.payment==='bank'?bankConfig(env):null;
  const due=b?new Date(Date.parse(order.created_at)+b.days*86400000).toISOString():null;
  const claimed=await env.DB.prepare('INSERT OR IGNORE INTO payment_attempts(order_number,provider,state,bank_details,due_at) VALUES (?,?,?,?,?)').bind(order.order_number,order.payment,state,b?JSON.stringify(b):null,due).run();
@@ -51,14 +53,21 @@ export async function start(order,env){
 export function paypalPaid(result,order,id){
  const units=result.purchase_units,unit=units?.[0],captures=unit?.payments?.captures,capture=captures?.[0];
  const customIds=[unit?.custom_id,capture?.custom_id].filter(value=>value!==undefined);
- return result.id===id&&result.status==='COMPLETED'&&units?.length===1&&unit.reference_id===order.order_number&&customIds.length>0&&customIds.every(value=>value===order.order_number)&&captures?.length===1&&capture.status==='COMPLETED'&&capture.amount?.currency_code==='TWD'&&Number(capture.amount.value)===order.total&&capture.final_capture===true;
+ return result.id===id&&result.status==='COMPLETED'&&units?.length===1&&unit.reference_id===order.order_number&&customIds.length>0&&customIds.every(value=>value===order.order_number)&&captures?.length===1&&typeof capture.id==='string'&&/^[a-zA-Z0-9]+$/.test(capture.id)&&capture.status==='COMPLETED'&&capture.amount?.currency_code==='TWD'&&typeof capture.amount.value==='string'&&/^[0-9]+(?:\.0{1,2})?$/.test(capture.amount.value)&&Number(capture.amount.value)===order.total&&capture.final_capture===true;
+}
+export function paypalApproved(result,order,id){
+ const unit=result.purchase_units?.[0],amount=unit?.amount;
+ return result.id===id&&result.intent==='CAPTURE'&&result.status==='APPROVED'&&result.purchase_units?.length===1&&unit.reference_id===order.order_number&&unit.custom_id===order.order_number&&amount?.currency_code==='TWD'&&typeof amount.value==='string'&&/^[0-9]+(?:\.0{1,2})?$/.test(amount.value)&&Number(amount.value)===order.total;
 }
 export async function confirm(order,env,data){
  sandbox(env);
+ if(order.payment!=='paypal')fail(503,'此付款方式目前暫停');
  const p=await env.DB.prepare('SELECT * FROM payment_attempts WHERE order_number=?').bind(order.order_number).first();
- if(!p||p.state!==data.state||!p.provider_id||!['linepay','paypal'].includes(order.payment))fail(400,'付款驗證資料不符');
+ if(!p||p.state!==data.state||p.provider!==order.payment||!p.provider_id||!['linepay','paypal'].includes(order.payment))fail(400,'付款驗證資料不符');
  if(order.status==='test_paid')return;
  if(order.status!=='pending')fail(409,'請查看訂單狀態');
+ await lockPayment(env,order.order_number);
+ let transactionId;
  if(order.payment==='linepay'){
   if(data.transactionId!==p.provider_id)fail(400,'付款交易編號不符');
   const info=await line(env,`/v3/payments/${p.provider_id}/confirm`,{amount:order.total,currency:'TWD'});
@@ -66,8 +75,24 @@ export async function confirm(order,env,data){
  }else{
   if(data.token!==p.provider_id)fail(400,'付款交易編號不符');
   let result=await paypal(env,'/v2/checkout/orders/'+p.provider_id);
-  if(result.status==='APPROVED')result=await paypal(env,`/v2/checkout/orders/${p.provider_id}/capture`,'POST',{},order.order_number+'-capture');
+  if(result.status==='APPROVED'){
+   if(!paypalApproved(result,order,p.provider_id))fail(409,'PayPal 訂單或金額不符，未進行扣款');
+   result=await paypal(env,`/v2/checkout/orders/${p.provider_id}/capture`,'POST',{},order.order_number+'-capture');
+  }
   if(!paypalPaid(result,order,p.provider_id))fail(409,'PayPal 款項尚未確認完成，請稍後再查詢');
+  transactionId=result.purchase_units[0].payments.captures[0].id;
  }
- await env.DB.prepare("UPDATE orders SET status='test_paid' WHERE order_number=? AND status='pending'").bind(order.order_number).run();
+ await settlePayment(env,order,order.payment,order.payment==='paypal'?transactionId:p.provider_id);
+}
+
+export async function reconcilePayments(env){
+ if(env.APP_ENV!=='staging'||!env.PAYPAL_SANDBOX_CLIENT_ID||!env.PAYPAL_SANDBOX_CLIENT_SECRET)return;
+ const rows=await env.DB.prepare("SELECT o.*,p.provider_id FROM orders o JOIN payment_attempts p ON p.order_number=o.order_number JOIN checkout_reservations r ON r.order_number=o.order_number WHERE o.status='pending' AND p.provider='paypal' AND p.provider_id IS NOT NULL AND r.state='paying' ORDER BY COALESCE((SELECT checked_at FROM payment_checks WHERE order_number=o.order_number),'') LIMIT 10").all();
+ for(const order of rows.results){
+  try{
+   const result=await paypal(env,'/v2/checkout/orders/'+order.provider_id);
+   if(paypalPaid(result,order,order.provider_id))await settlePayment(env,order,'paypal',result.purchase_units[0].payments.captures[0].id);
+  }catch{console.error('PayPal reconciliation pending',order.order_number);}
+  await env.DB.prepare('INSERT INTO payment_checks(checked_at,order_number) VALUES (?,?) ON CONFLICT(order_number) DO UPDATE SET checked_at=excluded.checked_at').bind(new Date().toISOString(),order.order_number).run();
+ }
 }

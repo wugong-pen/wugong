@@ -8,23 +8,9 @@ test('catalog rejects unknown items and uses server prices for each nib',()=>{
  assert.throws(()=>quote([{id:'pojun-單尖',nib:'雙層特殊尖',quantity:1}]));
  assert.throws(()=>quote([{id:'pojun-單尖',nib:'單尖',quantity:-1}]));
 });
-test('sandbox notification validates signature, amount, environment and is idempotent',async()=>{
- const sql=new DatabaseSync(':memory:');sql.exec("CREATE TABLE orders(order_number TEXT PRIMARY KEY,total INTEGER,payment TEXT,status TEXT);INSERT INTO orders VALUES ('WG0123456789abcdef01',25000,'ecpay','pending')");
- const DB={prepare(q){let args;return{bind(...a){args=a;return this;},async first(){return sql.prepare(q).get(...args);},async run(){return sql.prepare(q).run(...args);}};}};
- const env={DB,APP_ENV:'staging',PAYMENT_ORIGIN:'https://wugong-test.wugong-pen.workers.dev'};
- const base={MerchantID:'3002607',MerchantTradeNo:'WG0123456789abcdef01',TradeAmt:'25000',RtnCode:'1',SimulatePaid:'0',TradeNo:'123456',PaymentType:'Credit_CreditCard'};
- const send=async(p,tail='')=>notify(new Request('https://shop.test/api/payments/ecpay/notify',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({...p,CheckMacValue:checkMac(p)}).toString()+tail}),env);
- const status=()=>sql.prepare('SELECT status FROM orders').get().status;
- assert.equal((await send({...base,TradeAmt:'1'})).status,400);assert.equal(status(),'pending');
- assert.equal((await send(base,'&TradeAmt=1')).status,400);
- assert.equal((await send({...base,MerchantID:'invalid'})).status,400);
- assert.equal((await send({...base,SimulatePaid:'1'})).status,200);assert.equal(status(),'pending');
- const forged=new URLSearchParams({...base,CheckMacValue:'0'.repeat(64)});
- assert.equal((await notify(new Request('https://shop.test',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:forged}),env)).status,400);
- assert.equal(await(await send(base)).text(),'1|OK');assert.equal(status(),'test_paid');
- await send(base);assert.equal(status(),'test_paid');await send({...base,RtnCode:'0'});assert.equal(status(),'test_paid');
- const order={order_number:base.MerchantTradeNo,payment:'ecpay',status:'pending',total:25000,created_at:'2026-09-10T00:00:00Z'};
- const form=paymentForm(order,env);assert.match(form.action,/payment-stage/);assert.equal(form.fields.MerchantTradeDate,'2026/09/10 08:00:00');
- assert.throws(()=>paymentForm(order,{...env,APP_ENV:'production'}));assert.throws(()=>paymentForm({...order,status:'test_paid'},env));
- await assert.rejects(()=>notify(new Request('https://shop.test'),{...env,APP_ENV:'production'}));sql.close();
+test('public shared sandbox signatures cannot mark orders paid',async()=>{
+ const p={MerchantID:'3002607',MerchantTradeNo:'WG0123456789abcdef01',TradeAmt:'25000',RtnCode:'1',SimulatePaid:'0',TradeNo:'123456',PaymentType:'Credit_CreditCard'};
+ const env={APP_ENV:'staging',DB:{prepare(){throw new Error('Must not touch orders');}}};
+ const response=await notify(new Request('https://shop.test/api/payments/ecpay/notify',{method:'POST',body:new URLSearchParams({...p,CheckMacValue:checkMac(p)})}),env);
+ assert.equal(response.status,503);assert.throws(()=>paymentForm({},env));
 });

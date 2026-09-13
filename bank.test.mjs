@@ -7,6 +7,7 @@ function database(){
  const sql=new DatabaseSync(':memory:');
  sql.exec('CREATE TABLE orders(id INTEGER PRIMARY KEY AUTOINCREMENT,order_number TEXT UNIQUE,customer_name TEXT,phone TEXT,email TEXT,address TEXT,shipping TEXT,payment TEXT,note TEXT,items TEXT,total REAL,status TEXT,created_at TEXT);');
  sql.exec(readFileSync(new URL('./schema-members.sql',import.meta.url),'utf8'));
+ for(const file of ['schema-payments.sql','schema-checkout.sql','seed-inventory-staging.sql'])sql.exec(readFileSync(new URL('./'+file,import.meta.url),'utf8'));
  const prepare=(query)=>{let params=[];return{bind(...values){params=values;return this;},async first(){return sql.prepare(query).get(...params)||null;},async all(){return {results:sql.prepare(query).all(...params)};},async run(){const result=sql.prepare(query).run(...params);return{meta:{changes:result.changes}};}};};
  return{sql,prepare,async batch(statements){sql.exec('BEGIN');try{const results=[];for(const statement of statements)results.push(await statement.run());sql.exec('COMMIT');return results;}catch(e){sql.exec('ROLLBACK');throw e;}}};
 }
