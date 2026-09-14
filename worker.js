@@ -4,6 +4,8 @@ import {quote,paymentForm,notify,sandbox} from './ecpay.js';
 import { scrypt, timingSafeEqual } from 'node:crypto';
 import { COUNTRY_CODES } from './countries.js';
 const COOKIE = '__Host-wugong_session', TTL = 604800;
+const ADMIN_COOKIE = '__Host-wugong_admin', ADMIN_TTL = 3600;
+const adminCookie = (token,age=ADMIN_TTL) => `${ADMIN_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${age}`;
 const now = () => Math.floor(Date.now()/1000);
 const hex = bytes => Array.from(new Uint8Array(bytes), x=>x.toString(16).padStart(2,'0')).join('');
 const random = () => hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -71,6 +73,63 @@ async function issueSession(env,member,request,extra={}) {
   await env.DB.batch(statements);
   return json({success:true,member:publicMember(member),emailAvailable:mailAvailable(env,new URL(request.url)),...extra},200,{'Set-Cookie':cookie(token)});
 }
+async function adminSession(request,env,required=true) {
+  const token=(request.headers.get('Cookie')||'').split(';').map(v=>v.trim()).find(v=>v.startsWith(`${ADMIN_COOKIE}=`))?.slice(ADMIN_COOKIE.length+1);
+  const m=token&&/^[a-f0-9]{64}$/.test(token)?await env.DB.prepare('SELECT m.id,m.email,m.name,s.token_hash FROM admin_sessions s JOIN members m ON m.id=s.member_id JOIN admin_members a ON a.member_id=m.id WHERE s.token_hash=? AND s.expires_at>? AND m.active=1 AND a.active=1 AND s.password_snapshot=m.password_hash').bind(await digest(token),now()).first():null;
+  if(!m&&required)fail(403,'請使用有權限的管理員帳號登入');
+  return m;
+}
+async function adminApi(request,env,url) {
+  const path=url.pathname,method=request.method;
+  if(path==='/api/admin/login'&&method==='POST') {
+    await rate(env,`admin-login-ip:${request.headers.get('CF-Connecting-IP')||'local'}`,20);
+    const data=await body(request),address=email(data.email);
+    await rate(env,`admin-login-email:${address}`,8);
+    if(typeof data.password!=='string'||data.password.length>128)fail(400,'請確認密碼');
+    const m=await env.DB.prepare('SELECT m.* FROM members m JOIN admin_members a ON a.member_id=m.id WHERE m.email=? AND a.active=1').bind(address).first();
+    if(!await verifyPassword(data.password,m?.password_hash)||!m?.active)fail(401,'帳號、密碼或管理員權限不正確');
+    const token=random(),old=await adminSession(request,env,false);
+    const statements=[env.DB.prepare('INSERT INTO admin_sessions(token_hash,member_id,password_snapshot,expires_at) VALUES (?,?,?,?)').bind(await digest(token),m.id,m.password_hash,now()+ADMIN_TTL),env.DB.prepare('DELETE FROM admin_sessions WHERE expires_at<=?').bind(now()),env.DB.prepare('INSERT INTO admin_audit(id,member_id,action,created_at) VALUES (?,?,?,?)').bind(crypto.randomUUID(),m.id,'login',new Date().toISOString())];
+    if(old)statements.push(env.DB.prepare('DELETE FROM admin_sessions WHERE token_hash=?').bind(old.token_hash));
+    await env.DB.batch(statements);
+    return json({success:true,admin:{name:m.name,email:m.email}},200,{'Set-Cookie':adminCookie(token)});
+  }
+  if(path==='/api/admin/logout'&&method==='POST') {
+    const m=await adminSession(request,env,false);
+    if(m)await env.DB.prepare('DELETE FROM admin_sessions WHERE token_hash=?').bind(m.token_hash).run();
+    return json({success:true},200,{'Set-Cookie':adminCookie('',0)});
+  }
+  const m=await adminSession(request,env);
+  if(path==='/api/admin/session'&&method==='GET')return json({success:true,admin:{name:m.name,email:m.email}});
+  const base='SELECT o.order_number,o.customer_name,o.phone,o.email,o.address,o.shipping,o.payment,o.note,o.items,o.total,o.status,o.created_at,mo.shipping_country FROM orders o LEFT JOIN member_orders mo ON mo.order_number=o.order_number';
+  if((path==='/api/admin/orders'||path==='/api/orders')&&method==='GET') {
+    const page=Number(url.searchParams.get('page')||1);
+    if(!Number.isSafeInteger(page)||page<1||page>100000)fail(400,'頁碼不正確');
+    const rows=await env.DB.prepare(base+' ORDER BY o.created_at DESC,o.order_number DESC LIMIT 21 OFFSET ?').bind((page-1)*20).all();
+    return json({success:true,orders:rows.results.slice(0,20),hasMore:rows.results.length>20});
+  }
+  if(path.startsWith('/api/admin/orders/')&&method==='GET') {
+    let number;try{number=decodeURIComponent(path.slice('/api/admin/orders/'.length));}catch{fail(400,'訂單編號不正確');}
+    const order=await env.DB.prepare(base+' WHERE o.order_number=?').bind(text(number,60,'訂單編號')).first();
+    if(!order)fail(404,'找不到此訂單');return json({success:true,order});
+  }
+  if((path==='/api/admin/order/status'||path==='/api/order/status')&&method==='POST') {
+    await rate(env,`admin-update:${m.id}`,100);
+    const data=await body(request),number=text(data.orderNumber,60,'訂單編號');
+    // Payment/stock transitions belong exclusively to verified payment workflows.
+    if(!Object.keys(data).every(k=>['orderNumber','status','expectedStatus'].includes(k)))fail(400,'不支援的訂單欄位');
+    const transitions={paid:'shipped',shipped:'completed'};
+    if(!Object.hasOwn(transitions,data.expectedStatus)||transitions[data.expectedStatus]!==data.status)fail(409,'只能將已付款訂單標記出貨，或將已出貨訂單標記完成');
+    const id=crypto.randomUUID();
+    const results=await env.DB.batch([
+      env.DB.prepare('INSERT INTO admin_audit(id,member_id,action,order_number,previous_status,next_status,created_at) SELECT ?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM orders WHERE order_number=? AND status=?)').bind(id,m.id,'order.status',number,data.expectedStatus,data.status,new Date().toISOString(),number,data.expectedStatus),
+      env.DB.prepare('UPDATE orders SET status=? WHERE order_number=? AND status=? AND EXISTS(SELECT 1 FROM admin_audit WHERE id=?)').bind(data.status,number,data.expectedStatus,id)
+    ]);
+    if(!results[1].meta.changes)fail(409,'訂單狀態已變更或訂單不存在，請重新整理');
+    return json({success:true});
+  }
+  fail(404,'找不到此功能');
+}
 function mailAvailable(env,url) {
   return !!(env.RESEND_API_KEY&&env.MAIL_FROM&&env.MAIL_ORIGIN===url.origin&&url.protocol==='https:');
 }
@@ -118,8 +177,7 @@ async function api(request,env,url,ctx) {
   const path=url.pathname,method=request.method;
   if(path==='/api/payments/ecpay/notify')return notify(request,env);
   if(!['GET','HEAD'].includes(method)&&(request.headers.get('Origin')!==url.origin||request.headers.get('Sec-Fetch-Site')==='cross-site')) fail(403,'請從本站頁面操作');
-  // Legacy unauthenticated admin access stays closed until admin provisioning exists.
-  if(path==='/api/orders'||path==='/api/order/status') fail(403,'此功能僅限管理員，管理員登入功能尚未開放');
+  if(path.startsWith('/api/admin/')||path==='/api/orders'||path==='/api/order/status')return adminApi(request,env,url);
   if(path==='/api/member'&&method==='GET') {const m=await session(request,env,false);return json({success:true,member:m?publicMember(m):null,emailAvailable:mailAvailable(env,url)});}
   if(path==='/api/member/verify-email'&&method==='POST')return consumeEmailToken(request,env,'verify');
   if(path==='/api/member/reset-password'&&method==='POST')return consumeEmailToken(request,env,'reset');
@@ -233,14 +291,19 @@ export default {
     try{
       let response;
       if(url.pathname.startsWith('/api/'))response=await api(request,env,url,ctx);
+      else if((/^\/admin(?:\/|$)/i.test(url.pathname)||/^\/admin-(?!login(?:\.html)?\/?$)[^/.]+(?:\.html)?\/?$/i.test(url.pathname))&&!await adminSession(request,env,false))response=new Response(null,{status:303,headers:{Location:'/admin-login.html','Cache-Control':'no-store'}});
       else if(env.APP_ENV==='staging'&&url.pathname==='/robots.txt')response=new Response('User-agent: *\nDisallow: /\n',{headers:{'Content-Type':'text/plain; charset=utf-8'}});
       else if(/^\/checkout(?:\.html)?\/?$/.test(url.pathname)&&!await session(request,env,false))response=new Response(null,{status:303,headers:{Location:'/member.html?next=checkout','Cache-Control':'no-store'}});
       else{
         response=await env.ASSETS.fetch(request);
-        if(env.APP_ENV==='staging'&&response.headers.get('Content-Type')?.includes('text/html'))response=new HTMLRewriter().on('body',{element(el){el.prepend('<aside role="note" style="background:#fff1c2;color:#342300;padding:12px 16px;text-align:center;font:600 16px/1.5 sans-serif">測試版｜僅供功能確認，請勿填寫真實個資或付款。測試訂單與正式版分開。</aside>',{html:true});}}).transform(response);
+        if(env.APP_ENV==='staging'&&response.headers.get('Content-Type')?.includes('text/html')&&!url.pathname.startsWith('/admin'))response=new HTMLRewriter().on('body',{element(el){el.prepend('<aside role="note" style="background:#fff1c2;color:#342300;padding:12px 16px;text-align:center;font:600 16px/1.5 sans-serif">網站建置中｜尚未開放正式收款，請勿匯款。</aside>',{html:true});}}).transform(response);
       }
       const result=new Response(response.body,response);
       result.headers.set('X-Content-Type-Options','nosniff');result.headers.set('Referrer-Policy','same-origin');result.headers.set('X-Frame-Options','DENY');
+      if(/^\/(?:admin|api\/admin)/i.test(url.pathname)||['/api/orders','/api/order/status'].includes(url.pathname)) {
+        result.headers.set('Cache-Control','no-store');result.headers.set('X-Robots-Tag','noindex, nofollow, noarchive');
+        result.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+      }
       if(env.APP_ENV==='staging')result.headers.set('X-Robots-Tag','noindex, nofollow, noarchive');
       if(/^\/(member|checkout)(\.html)?\/?$/.test(url.pathname))result.headers.set('Cache-Control','no-store');
       if(/^\/member(\.html)?\/?$/.test(url.pathname))result.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");

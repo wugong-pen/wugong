@@ -12,10 +12,16 @@ test('Cloudflare runtime supports password hashing and D1 membership',async()=>{
   const db=await mf.getD1Database('DB');
   const schema=readFileSync(new URL('./schema-members.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'');
   for(const statement of schema.split(';').filter(s=>s.trim()))await db.prepare(statement).run();
+  for(const statement of readFileSync(new URL('./schema-admin.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'').split(';').filter(s=>s.trim()))await db.prepare(statement).run();
   const response=await mf.dispatchFetch('https://shop.test/api/member/register',{method:'POST',headers:{Origin:'https://shop.test','Content-Type':'application/json'},body:JSON.stringify({email:'runtime@example.test',password:'runtime test password is long',name:'測試會員',birthday:'1990-01-01',country:'TW'})});
   const result=await response.json();assert.equal(response.status,200,JSON.stringify(result));assert.equal(result.member.name,'測試會員');
   const cookie=response.headers.get('set-cookie').split(';')[0];
   const me=await mf.dispatchFetch('https://shop.test/api/member',{headers:{Cookie:cookie}});assert.equal((await me.json()).member.email,'runtime@example.test');
+  assert.equal((await mf.dispatchFetch('https://shop.test/api/admin/session',{headers:{Cookie:cookie}})).status,403);
+  await db.prepare('INSERT INTO admin_members VALUES (?,1,?)').bind(result.member.id,new Date().toISOString()).run();
+  const adminLogin=await mf.dispatchFetch('https://shop.test/api/admin/login',{method:'POST',headers:{Origin:'https://shop.test','Content-Type':'application/json'},body:JSON.stringify({email:'runtime@example.test',password:'runtime test password is long'})});
+  assert.equal(adminLogin.status,200);const adminCookie=adminLogin.headers.get('set-cookie').split(';')[0];
+  assert.equal((await mf.dispatchFetch('https://shop.test/api/admin/session',{headers:{Cookie:adminCookie}})).status,200);
   await db.prepare('CREATE TABLE orders(order_number TEXT PRIMARY KEY,customer_name TEXT,phone TEXT,email TEXT,address TEXT,shipping TEXT,payment TEXT,note TEXT,items TEXT,total INTEGER,status TEXT,created_at TEXT)').run();
   for(const statement of readFileSync(new URL('./schema-payments.sql',import.meta.url),'utf8').split(';').filter(s=>s.trim()))await db.prepare(statement).run();
   for(const statement of readFileSync(new URL('./schema-checkout.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'').match(/CREATE TRIGGER[\s\S]*?\nEND;|CREATE (?:TABLE|INDEX)[\s\S]*?;/g))await db.prepare(statement).run();
