@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS nib_types(name TEXT PRIMARY KEY,active INTEGER NOT NULL DEFAULT 1 CHECK(active IN(0,1)));
+INSERT OR IGNORE INTO nib_types(name) SELECT DISTINCT variant FROM products WHERE category='pen';
+CREATE TABLE IF NOT EXISTS product_families(family TEXT PRIMARY KEY,stock_sku TEXT NOT NULL UNIQUE REFERENCES inventory(sku),confirmed INTEGER NOT NULL DEFAULT 0,threshold INTEGER NOT NULL DEFAULT 2 CHECK(threshold>=0),video TEXT NOT NULL DEFAULT '',version INTEGER NOT NULL DEFAULT 1);
+INSERT OR IGNORE INTO inventory(sku,available) SELECT 'body-'||family,0 FROM products GROUP BY family;
+INSERT OR IGNORE INTO product_families(family,stock_sku) SELECT family,'body-'||family FROM products GROUP BY family;
+CREATE TABLE IF NOT EXISTS coupons(code TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN('fixed','percent')),amount INTEGER NOT NULL CHECK(amount>0),minimum INTEGER NOT NULL DEFAULT 0,maximum INTEGER NOT NULL,scope TEXT NOT NULL CHECK(scope IN('all','family','category')),target TEXT NOT NULL DEFAULT '',starts TEXT NOT NULL,ends TEXT NOT NULL,quota INTEGER NOT NULL CHECK(quota>0),active INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS coupon_claims(code TEXT NOT NULL REFERENCES coupons(code),member_id TEXT NOT NULL,order_number TEXT NOT NULL UNIQUE REFERENCES orders(order_number),discount INTEGER NOT NULL CHECK(discount>0),PRIMARY KEY(code,member_id));
+CREATE TABLE IF NOT EXISTS order_discounts(order_number TEXT PRIMARY KEY REFERENCES orders(order_number),code TEXT NOT NULL,subtotal INTEGER NOT NULL,discount INTEGER NOT NULL);

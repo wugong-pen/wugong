@@ -1,3 +1,4 @@
+import {discountQuote,couponStatements} from './modules.js';
 import {expireReservations,checkStock,reserveStatements} from './inventory.js';
 import {methods,start,confirm,reconcilePayments} from './payments.js';
 import {quote,paymentForm,notify,sandbox} from './ecpay.js';
@@ -262,7 +263,7 @@ async function api(request,env,url,ctx) {
     if(!result.meta.changes)fail(409,'匯款期限已過或尚未取得匯款資料');
     return json({success:true,message:'已收到回報，待人工核對；回報不代表付款完成'});
   }
-  if(path==='/api/checkout/quote'&&method==='POST'){await session(request,env);sandbox(env);await expireReservations(env);const q=await catalogQuote(env,(await body(request)).items);await checkStock(env,q.items);return json({success:true,...q});}
+  if(path==='/api/checkout/quote'&&method==='POST'){const m=await session(request,env);sandbox(env);await expireReservations(env);const d=await body(request),q=await discountQuote(env,await catalogQuote(env,d.items),d.coupon,m.id);await checkStock(env,q.items);return json({success:true,...q,coupon:q.coupon?.code||null});}
   if(path==='/api/payments/ecpay/start'&&method==='POST'){
     const m=await session(request,env);sandbox(env);const data=await body(request);
     const order=await env.DB.prepare('SELECT o.* FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE o.order_number=? AND mo.member_id=?').bind(text(data.orderNumber,60,'訂單編號'),m.id).first();
@@ -278,7 +279,7 @@ async function api(request,env,url,ctx) {
     if(!COUNTRY_CODES.includes(c.country))fail(400,'請選擇收件國家／地區');
     sandbox(env);
     await expireReservations(env);
-    const {items,total}=await catalogQuote(env,order.items),number='WG'+random().slice(0,18);
+    const q=await discountQuote(env,await catalogQuote(env,order.items),order.coupon,m.id),{items,total}=q,number='WG'+random().slice(0,18);
     if(c.country!=='TW'&&items.some(i=>i.category==='ink'))fail(400,'墨水僅寄送台灣，請移除墨水商品後再結帳');
     const shipping=text(order.shipping??'',40,'配送方式',false),payment=text(order.payment,30,'付款方式'),note=text(order.note??'',1000,'備註',false);
     if(methods(env,c.country)[payment]!==true)fail(400,'此付款方式尚未設定或不適用收件國家');
@@ -287,7 +288,7 @@ async function api(request,env,url,ctx) {
       ...catalogGuards(env,items),
       env.DB.prepare('INSERT INTO orders(order_number,customer_name,phone,email,address,shipping,payment,note,items,total,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(number,name,phone,m.email,address,shipping,payment,note,JSON.stringify(items),total,'pending',new Date().toISOString()),
       env.DB.prepare('INSERT INTO member_orders(order_number,member_id,shipping_country,request_key) VALUES (?,?,?,?)').bind(number,m.id,c.country,key),
-      ...reserveStatements(env,number,items,payment)
+      ...reserveStatements(env,number,items,payment),...couponStatements(env,q,m.id,number)
     ]);}catch(error){const retry=await env.DB.prepare('SELECT order_number FROM member_orders WHERE member_id=? AND request_key=?').bind(m.id,key).first();if(!retry){if(error.message?.includes('CHECK constraint failed: quantity'))fail(409,'商品庫存不足，請調整數量後再試');throw error;}return json({success:true,orderNumber:retry.order_number});}
     return json({success:true,orderNumber:number});
   }
@@ -315,7 +316,7 @@ export default {
       result.headers.set('X-Content-Type-Options','nosniff');result.headers.set('Referrer-Policy','same-origin');result.headers.set('X-Frame-Options','DENY');
       if(/^\/(?:admin|api\/admin)/i.test(url.pathname)||['/api/orders','/api/order/status'].includes(url.pathname)) {
         result.headers.set('Cache-Control','no-store');result.headers.set('X-Robots-Tag','noindex, nofollow, noarchive');
-        result.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+        result.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-src https://www.youtube-nocookie.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
       }
       if(env.APP_ENV==='staging')result.headers.set('X-Robots-Tag','noindex, nofollow, noarchive');
       if(/^\/(member|checkout)(\.html)?\/?$/.test(url.pathname))result.headers.set('Cache-Control','no-store');

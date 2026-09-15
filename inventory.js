@@ -6,15 +6,16 @@ export async function expireReservations(env){
  await env.DB.batch([
   env.DB.prepare(`UPDATE inventory SET available=available+COALESCE((SELECT SUM(quantity) FROM checkout_lines WHERE sku=inventory.sku AND order_number IN (SELECT order_number FROM checkout_reservations WHERE ${eligible})),0)`).bind(stamp),
   env.DB.prepare(`UPDATE checkout_reservations SET state='released' WHERE ${eligible}`).bind(stamp),
+  env.DB.prepare("DELETE FROM coupon_claims WHERE order_number IN (SELECT order_number FROM checkout_reservations WHERE state='released')"),
   env.DB.prepare("UPDATE orders SET status='expired' WHERE status='pending' AND EXISTS(SELECT 1 FROM checkout_reservations r WHERE r.order_number=orders.order_number AND r.state='released')")
  ]);
 }
 export async function checkStock(env,items){
- const counts=new Map();for(const i of items)counts.set(i.id,(counts.get(i.id)||0)+i.quantity);
+ const counts=new Map();for(const i of items)counts.set(i.stockId||i.id,(counts.get(i.stockId||i.id)||0)+i.quantity);
  for(const [sku,count] of counts){const row=await env.DB.prepare('SELECT available FROM inventory WHERE sku=?').bind(sku).first();if(!row||row.available<count)fail(409,'商品庫存不足，請調整數量後再試');}
 }
 export function reserveStatements(env,number,items,payment){
- const counts=new Map();for(const i of items)counts.set(i.id,(counts.get(i.id)||0)+i.quantity);
+ const counts=new Map();for(const i of items)counts.set(i.stockId||i.id,(counts.get(i.stockId||i.id)||0)+i.quantity);
  return [env.DB.prepare("INSERT INTO checkout_reservations(order_number,state,expires_at) VALUES (?,'held',?)").bind(number,new Date(Date.now()+(payment==='bank'?3*86400000:30*60000)).toISOString()),...Array.from(counts,([sku,count])=>[
   // A failed quantity CHECK rolls back every statement in the D1 transaction.
   env.DB.prepare('INSERT INTO checkout_lines(order_number,sku,quantity) VALUES (?,?,CASE WHEN (SELECT available FROM inventory WHERE sku=?)>=? THEN ? ELSE 0 END)').bind(number,sku,sku,count,count),

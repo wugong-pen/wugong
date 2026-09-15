@@ -30,3 +30,5 @@ ADMIN.md
 admin-provision.mjs
 commerce.js
 COMMERCE.md
+
+modules.js

@@ -2,7 +2,7 @@ const $=id=>document.getElementById(id);
 if(document.body.dataset.page!=='login'){
  const style=document.createElement('link');style.rel='stylesheet';style.href='/manage.css';document.head.append(style);
  const nav=document.createElement('nav');nav.className='admin-nav';nav.setAttribute('aria-label','後台管理');
- for(const [label,url] of [['訂單管理','/admin-orders.html'],['商品管理','/admin-manage.html?section=products'],['庫存管理','/admin-manage.html?section=stock'],['會員管理','/admin-manage.html?section=members'],['操作紀錄','/admin-manage.html?section=audit'],['查看商店','/shop.html']]){const a=document.createElement('a');a.textContent=label;a.href=url;if((url.includes(location.search)&&url.includes('admin-manage')&&location.pathname.includes('admin-manage'))||(!location.search&&url.includes('admin-orders')&&location.pathname.includes('admin-orders')))a.setAttribute('aria-current','page');nav.append(a);}document.querySelector('header').after(nav);
+ for(const [label,url] of [['訂單管理','/admin-orders.html'],['商品管理','/admin-manage.html?section=products'],['筆款庫存／影片','/admin-manage.html?section=stock'],['尖型管理','/admin-manage.html?section=nibs'],['優惠券','/admin-manage.html?section=coupons'],['會員管理','/admin-manage.html?section=members'],['操作紀錄','/admin-manage.html?section=audit'],['查看商店','/shop.html']]){const a=document.createElement('a');a.textContent=label;a.href=url;if((url.includes(location.search)&&url.includes('admin-manage')&&location.pathname.includes('admin-manage'))||(!location.search&&url.includes('admin-orders')&&location.pathname.includes('admin-orders')))a.setAttribute('aria-current','page');nav.append(a);}document.querySelector('header').after(nav);
 }
 const labels={pending:'待付款',confirmed:'已確認',paid:'已付款',test_paid:'模擬付款紀錄',shipped:'已出貨',completed:'已完成',cancelled:'已取消',expired:'已逾期'};
 const payments={bank:'銀行匯款',paypal:'PayPal',linepay:'LINE Pay'};
@@ -54,6 +54,7 @@ if(document.body.dataset.page==='login'){
 async function orderManagement(number){
  document.getElementById('order-management')?.remove();
  const d=await api('/api/admin/order-management?order='+encodeURIComponent(number)),form=node('form');form.id='order-management';form.className='manage-form';form.append(node('h2','內部備註與出貨資料'));
+ if(d.discount)form.append(node('p','優惠券 '+d.discount.code+'｜商品小計 NT$'+d.discount.subtotal.toLocaleString()+'｜折抵 NT$'+d.discount.discount.toLocaleString()));
  const inputs={};for(const [key,label]of [['admin_note','內部備註（不會顯示給會員）'],['carrier','物流公司'],['tracking','物流單號']]){const l=node('label',label),input=node(key==='admin_note'?'textarea':'input');input.value=d.management[key];input.maxLength=key==='admin_note'?4000:100;l.append(input);form.append(l);inputs[key]=input;}
  if(d.remittance?.reported_at)form.append(node('p','會員匯款回報：末五碼 '+d.remittance.remittance_last5+'；日期 '+d.remittance.remittance_date+'。回報尚不代表收款完成。'));
  const save=node('button','儲存備註與物流資料');save.type='submit';form.append(save);$('content').after(form);form.onsubmit=async e=>{e.preventDefault();save.disabled=true;try{await api('/api/admin/order-management','POST',{orderNumber:number,version:d.management.version,...Object.fromEntries(Object.entries(inputs).map(([k,v])=>[k,v.value]))});await orderManagement(number);message('訂單管理資料已儲存。');}catch(e){message(e.message);}finally{save.disabled=false;}};
