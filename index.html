@@ -454,8 +454,8 @@ section{
     .brand-group{
         padding:22px;
     }
-}  
-  
+}
+
   /* ===== PRODUCT CARDS ===== */
 
 .product-list{
@@ -843,10 +843,10 @@ footer strong{
 
   <div class="brand-group">
     <h3>吾鋼 WUGONG</h3>
-    <button onclick="window.location.href='category-craft.html'">傳統工藝</button>
-    <button onclick="window.location.href='category-special.html'">特殊筆款</button>
-    <button>世界奇木系列</button>
-    <button>手工墨水</button>
+    <button onclick="window.location.href='/shop.html?category=pen'">傳統工藝</button>
+    <button onclick="window.location.href='/shop.html?category=pen'">特殊筆款</button>
+    <button onclick="window.location.href='/shop.html?category=craft'">工藝收藏</button>
+    <button onclick="window.location.href='/shop.html?category=ink'">手工墨水</button>
   </div>
 
   <div class="brand-group">
@@ -857,7 +857,7 @@ footer strong{
 
 </div>
 
- 
+
 </section>
 
 
@@ -1014,11 +1014,11 @@ function saveCart() {
     JSON.stringify(cart)
   );
 
-  renderCart();
+  safeRenderCart();
 }
 
 
-function renderCart() {
+function legacyRenderCartDisabled() {
 
   const container =
     document.getElementById("cartItems");
@@ -1098,6 +1098,7 @@ function removeCartItem(index) {
 }
 
 
+function safeRenderCart(){const host=document.getElementById('cartItems');if(!host)return;host.replaceChildren();const a=document.createElement('a');a.href='/cart.html';a.textContent='查看購物車與結帳';host.append(a);}
 function openCart() {
 
   document

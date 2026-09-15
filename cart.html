@@ -184,7 +184,7 @@
 
 <header>
   <a href="index.html">WUGONG 吾鋼</a>
-  <a href="index.html#shop">繼續購物</a>
+  <a href="/shop.html">繼續購物</a>
 <a href="/member.html" style="color:#d6b16f">會員中心</a></header>
 
 <main class="container">
@@ -206,7 +206,7 @@
       <span id="total">NT$0</span>
     </div>
 
-    <button class="checkout-btn" onclick="goCheckout()">
+    <button class="checkout-btn" id="checkoutButton">
       前往結帳
     </button>
 
@@ -214,139 +214,7 @@
 
 </main>
 
-<script>
-
-  function getCart() {
-    return JSON.parse(localStorage.getItem("wugongCart")) || [];
-  }
-
-  function saveCart(cart) {
-    localStorage.setItem("wugongCart", JSON.stringify(cart));
-  }
-
-  function renderCart() {
-
-    const cart = getCart();
-    const container = document.getElementById("cartItems");
-    const summary = document.getElementById("cartSummary");
-
-    container.innerHTML = "";
-
-    if (cart.length === 0) {
-
-      summary.style.display = "none";
-
-      container.innerHTML = `
-        <div class="empty-cart">
-          購物車目前是空的。<br><br>
-          <a href="index.html#shop">返回線上商店</a>
-        </div>
-      `;
-
-      return;
-    }
-
-    summary.style.display = "block";
-
-    let subtotal = 0;
-
-    cart.forEach((item, index) => {
-
-      const itemTotal = Number(item.price) * Number(item.quantity);
-      subtotal += itemTotal;
-
-      const row = document.createElement("div");
-      row.className = "cart-item";
-
-      row.innerHTML = `
-        <img src="${item.image}" alt="${item.product}">
-
-        <div>
-
-          <div class="item-name">
-            ${item.product}
-          </div>
-
-          ${
-            item.nib
-            ? `<div class="item-nib">筆尖：${item.nib}</div>`
-            : ""
-          }
-
-          <div class="item-price">
-            NT$${Number(item.price).toLocaleString()}
-          </div>
-
-          <div class="qty-row">
-
-            <button onclick="changeCartQty(${index}, -1)">−</button>
-
-            <div class="qty-value">
-              ${item.quantity}
-            </div>
-
-            <button onclick="changeCartQty(${index}, 1)">＋</button>
-
-          </div>
-
-          <button
-            class="remove-btn"
-            onclick="removeCartItem(${index})">
-            移除
-          </button>
-
-        </div>
-
-        <div class="item-subtotal">
-          NT$${itemTotal.toLocaleString()}
-        </div>
-      `;
-
-      container.appendChild(row);
-
-    });
-
-    document.getElementById("subtotal").textContent =
-      "NT$" + subtotal.toLocaleString();
-
-    document.getElementById("total").textContent =
-      "NT$" + subtotal.toLocaleString();
-
-  }
-
-  function changeCartQty(index, amount) {
-
-    const cart = getCart();
-
-    cart[index].quantity += amount;
-
-    if (cart[index].quantity < 1) {
-      cart[index].quantity = 1;
-    }
-
-    saveCart(cart);
-    renderCart();
-
-  }
-
-  function removeCartItem(index) {
-
-    const cart = getCart();
-
-    cart.splice(index, 1);
-
-    saveCart(cart);
-    renderCart();
-
-  }
-
-  function goCheckout() {
-    window.location.href = "checkout.html";
-  }
-
-  renderCart();
-
-</script>
+<script type="module" src="/cart-safe.js"></script>
 
 </body>
 </html>

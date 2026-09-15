@@ -7,7 +7,7 @@ import {checkMac} from './ecpay.js';
 const require=createRequire(import.meta.url);
 const {Miniflare,convertV4MiniflareOptions}=require(require.resolve('miniflare',{paths:[require.resolve('wrangler')]}));
 test('Cloudflare runtime supports password hashing and D1 membership',async()=>{
- const mf=new Miniflare(convertV4MiniflareOptions({modules:[{type:'ESModule',path:fileURLToPath(new URL('./worker.js',import.meta.url)),contents:readFileSync(new URL('./worker.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./countries.js',import.meta.url)),contents:readFileSync(new URL('./countries.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./ecpay.js',import.meta.url)),contents:readFileSync(new URL('./ecpay.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./payments.js',import.meta.url)),contents:readFileSync(new URL('./payments.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./inventory.js',import.meta.url)),contents:readFileSync(new URL('./inventory.js',import.meta.url),'utf8')}],compatibilityDate:'2026-09-07',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],bindings:{APP_ENV:'staging',PAYMENT_ORIGIN:'https://wugong-test.wugong-pen.workers.dev',BANK_TEST_CONFIG:JSON.stringify({bank:'測試銀行',code:'TEST',branch:'測試分行',holder:'測試戶名',account:'TEST-NOT-A-REAL-ACCOUNT',days:3})}}));
+ const mf=new Miniflare(convertV4MiniflareOptions({modules:[{type:'ESModule',path:fileURLToPath(new URL('./worker.js',import.meta.url)),contents:readFileSync(new URL('./worker.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./countries.js',import.meta.url)),contents:readFileSync(new URL('./countries.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./ecpay.js',import.meta.url)),contents:readFileSync(new URL('./ecpay.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./payments.js',import.meta.url)),contents:readFileSync(new URL('./payments.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./inventory.js',import.meta.url)),contents:readFileSync(new URL('./inventory.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./commerce.js',import.meta.url)),contents:readFileSync(new URL('./commerce.js',import.meta.url),'utf8')}],compatibilityDate:'2026-09-07',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],bindings:{APP_ENV:'staging',PAYMENT_ORIGIN:'https://wugong-test.wugong-pen.workers.dev',BANK_TEST_CONFIG:JSON.stringify({bank:'測試銀行',code:'TEST',branch:'測試分行',holder:'測試戶名',account:'TEST-NOT-A-REAL-ACCOUNT',days:3})}}));
  try{
   const db=await mf.getD1Database('DB');
   const schema=readFileSync(new URL('./schema-members.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'');
@@ -26,6 +26,8 @@ test('Cloudflare runtime supports password hashing and D1 membership',async()=>{
   for(const statement of readFileSync(new URL('./schema-payments.sql',import.meta.url),'utf8').split(';').filter(s=>s.trim()))await db.prepare(statement).run();
   for(const statement of readFileSync(new URL('./schema-checkout.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'').match(/CREATE TRIGGER[\s\S]*?\nEND;|CREATE (?:TABLE|INDEX)[\s\S]*?;/g))await db.prepare(statement).run();
   for(const statement of readFileSync(new URL('./seed-inventory-staging.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'').split(';').filter(s=>s.trim()))await db.prepare(statement).run();
+  for(const statement of readFileSync(new URL('./schema-commerce.sql',import.meta.url),'utf8').match(/CREATE TRIGGER[\s\S]*?END;|CREATE (?:TABLE|INDEX)[\s\S]*?;/g))await db.prepare(statement).run();
+  for(const statement of readFileSync(new URL('./seed-products.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'').split(';').filter(s=>s.trim()))await db.prepare(statement).run();
   const payload={customer:{name:'測試',phone:'0000000000',address:'測試地址',country:'TW'},items:[{id:'pojun-單尖',nib:'單尖',price:1,quantity:1}],expectedTotal:25000,payment:'bank',shipping:'宅配'};
   const orderResponse=await mf.dispatchFetch('https://shop.test/api/order',{method:'POST',headers:{Origin:'https://shop.test','Content-Type':'application/json',Cookie:cookie,'Idempotency-Key':'runtime-payment-0001'},body:JSON.stringify(payload)});
   const order=await orderResponse.json();assert.equal(orderResponse.status,200,JSON.stringify(order));
@@ -53,6 +55,13 @@ test('Cloudflare runtime supports password hashing and D1 membership',async()=>{
   assert.equal(new Set(repeated.map(r=>r.orderNumber)).size,1);
   assert.equal((await db.prepare("SELECT available FROM inventory WHERE sku='product-fuji'").first()).available,4);
   assert.equal((await db.prepare('SELECT count(*) n FROM orders').first()).n,6);
+  const adminHeaders={Origin:'https://shop.test','Content-Type':'application/json',Cookie:adminCookie};
+  const edits=await Promise.all(Array.from({length:5},()=>post('/api/admin/stock',{sku:'product-fuji',expected:4,delta:1,reason:'concurrent adjustment'},adminHeaders)));
+  assert.equal(edits.filter(r=>r.status===200).length,1,JSON.stringify(edits));assert.equal(edits.filter(r=>r.status===409).length,4);
+  assert.equal((await db.prepare("SELECT available FROM inventory WHERE sku='product-fuji'").first()).available,5);
+  assert.equal((await db.prepare("SELECT count(*) n FROM commerce_audit WHERE action='stock.adjust'").first()).n,1);
+  const png=new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6v1UAAAAASUVORK5CYII=','base64'));
+  const uploaded=await mf.dispatchFetch('https://shop.test/api/admin/images',{method:'POST',headers:{...adminHeaders,'Content-Type':'image/png'},body:png});assert.equal(uploaded.status,200);const uploadedData=await uploaded.json();const media=await mf.dispatchFetch('https://shop.test'+uploadedData.url);assert.deepEqual(new Uint8Array(await media.arrayBuffer()),png);
  }finally{await mf.dispose();}
 });
 

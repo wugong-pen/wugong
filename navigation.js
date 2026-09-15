@@ -1,5 +1,6 @@
 const menuButton=document.querySelector('.menu-toggle');
 const siteNav=document.getElementById('site-nav');
+if(siteNav){const link=document.createElement('a');link.href='/shop.html';link.textContent='線上商店';siteNav.append(link);}
 function closeMenu(){
   siteNav.classList.remove('is-open');
   menuButton.setAttribute('aria-expanded','false');

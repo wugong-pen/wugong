@@ -3,6 +3,7 @@ import {methods,start,confirm,reconcilePayments} from './payments.js';
 import {quote,paymentForm,notify,sandbox} from './ecpay.js';
 import { scrypt, timingSafeEqual } from 'node:crypto';
 import { COUNTRY_CODES } from './countries.js';
+import {catalogQuote,catalogGuards,publicCommerce,manageCommerce} from './commerce.js';
 const COOKIE = '__Host-wugong_session', TTL = 604800;
 const ADMIN_COOKIE = '__Host-wugong_admin', ADMIN_TTL = 3600;
 const adminCookie = (token,age=ADMIN_TTL) => `${ADMIN_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${age}`;
@@ -100,12 +101,17 @@ async function adminApi(request,env,url) {
     return json({success:true},200,{'Set-Cookie':adminCookie('',0)});
   }
   const m=await adminSession(request,env);
+  if(path.startsWith('/api/admin/')&&!['/api/admin/session','/api/admin/orders','/api/admin/order/status'].includes(path)&&!path.startsWith('/api/admin/orders/')) {
+    if(method!=='GET')await rate(env,`admin-commerce:${m.id}`,120);
+    const result=await manageCommerce(request,env,url,m,body);if(result!==null)return json({success:true,...result});
+  }
   if(path==='/api/admin/session'&&method==='GET')return json({success:true,admin:{name:m.name,email:m.email}});
   const base='SELECT o.order_number,o.customer_name,o.phone,o.email,o.address,o.shipping,o.payment,o.note,o.items,o.total,o.status,o.created_at,mo.shipping_country FROM orders o LEFT JOIN member_orders mo ON mo.order_number=o.order_number';
   if((path==='/api/admin/orders'||path==='/api/orders')&&method==='GET') {
     const page=Number(url.searchParams.get('page')||1);
     if(!Number.isSafeInteger(page)||page<1||page>100000)fail(400,'頁碼不正確');
-    const rows=await env.DB.prepare(base+' ORDER BY o.created_at DESC,o.order_number DESC LIMIT 21 OFFSET ?').bind((page-1)*20).all();
+    const search=text(url.searchParams.get('q')||'',100,'搜尋',false),state=text(url.searchParams.get('status')||'',30,'狀態',false);
+    const rows=await env.DB.prepare(base+" WHERE (?='' OR instr(o.order_number,?)>0 OR instr(o.customer_name,?)>0 OR instr(o.email,?)>0) AND (?='' OR o.status=?) ORDER BY o.created_at DESC,o.order_number DESC LIMIT 21 OFFSET ?").bind(search,search,search,search,state,state,(page-1)*20).all();
     return json({success:true,orders:rows.results.slice(0,20),hasMore:rows.results.length>20});
   }
   if(path.startsWith('/api/admin/orders/')&&method==='GET') {
@@ -175,6 +181,7 @@ async function consumeEmailToken(request,env,purpose) {
 }
 async function api(request,env,url,ctx) {
   const path=url.pathname,method=request.method;
+  if(path==='/api/catalog'&&method==='GET')return json({success:true,...await publicCommerce(request,env,url)});
   if(path==='/api/payments/ecpay/notify')return notify(request,env);
   if(!['GET','HEAD'].includes(method)&&(request.headers.get('Origin')!==url.origin||request.headers.get('Sec-Fetch-Site')==='cross-site')) fail(403,'請從本站頁面操作');
   if(path.startsWith('/api/admin/')||path==='/api/orders'||path==='/api/order/status')return adminApi(request,env,url);
@@ -255,7 +262,7 @@ async function api(request,env,url,ctx) {
     if(!result.meta.changes)fail(409,'匯款期限已過或尚未取得匯款資料');
     return json({success:true,message:'已收到回報，待人工核對；回報不代表付款完成'});
   }
-  if(path==='/api/checkout/quote'&&method==='POST'){await session(request,env);sandbox(env);await expireReservations(env);const q=quote((await body(request)).items);await checkStock(env,q.items);return json({success:true,...q});}
+  if(path==='/api/checkout/quote'&&method==='POST'){await session(request,env);sandbox(env);await expireReservations(env);const q=await catalogQuote(env,(await body(request)).items);await checkStock(env,q.items);return json({success:true,...q});}
   if(path==='/api/payments/ecpay/start'&&method==='POST'){
     const m=await session(request,env);sandbox(env);const data=await body(request);
     const order=await env.DB.prepare('SELECT o.* FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE o.order_number=? AND mo.member_id=?').bind(text(data.orderNumber,60,'訂單編號'),m.id).first();
@@ -271,11 +278,13 @@ async function api(request,env,url,ctx) {
     if(!COUNTRY_CODES.includes(c.country))fail(400,'請選擇收件國家／地區');
     sandbox(env);
     await expireReservations(env);
-    const {items,total}=quote(order.items),number='WG'+random().slice(0,18);
+    const {items,total}=await catalogQuote(env,order.items),number='WG'+random().slice(0,18);
+    if(c.country!=='TW'&&items.some(i=>i.category==='ink'))fail(400,'墨水僅寄送台灣，請移除墨水商品後再結帳');
     const shipping=text(order.shipping??'',40,'配送方式',false),payment=text(order.payment,30,'付款方式'),note=text(order.note??'',1000,'備註',false);
     if(methods(env,c.country)[payment]!==true)fail(400,'此付款方式尚未設定或不適用收件國家');
     if(order.expectedTotal!==total)fail(409,'商品金額已更新，請重新整理後確認');
     try{await env.DB.batch([
+      ...catalogGuards(env,items),
       env.DB.prepare('INSERT INTO orders(order_number,customer_name,phone,email,address,shipping,payment,note,items,total,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(number,name,phone,m.email,address,shipping,payment,note,JSON.stringify(items),total,'pending',new Date().toISOString()),
       env.DB.prepare('INSERT INTO member_orders(order_number,member_id,shipping_country,request_key) VALUES (?,?,?,?)').bind(number,m.id,c.country,key),
       ...reserveStatements(env,number,items,payment)
@@ -290,11 +299,15 @@ export default {
     const url=new URL(request.url);
     try{
       let response;
-      if(url.pathname.startsWith('/api/'))response=await api(request,env,url,ctx);
+      if(url.pathname.startsWith('/media/'))response=await publicCommerce(request,env,url)||new Response(null,{status:404});
+      else if(url.pathname.startsWith('/api/'))response=await api(request,env,url,ctx);
       else if((/^\/admin(?:\/|$)/i.test(url.pathname)||/^\/admin-(?!login(?:\.html)?\/?$)[^/.]+(?:\.html)?\/?$/i.test(url.pathname))&&!await adminSession(request,env,false))response=new Response(null,{status:303,headers:{Location:'/admin-login.html','Cache-Control':'no-store'}});
       else if(env.APP_ENV==='staging'&&url.pathname==='/robots.txt')response=new Response('User-agent: *\nDisallow: /\n',{headers:{'Content-Type':'text/plain; charset=utf-8'}});
       else if(/^\/checkout(?:\.html)?\/?$/.test(url.pathname)&&!await session(request,env,false))response=new Response(null,{status:303,headers:{Location:'/member.html?next=checkout','Cache-Control':'no-store'}});
       else{
+        const legacy=url.pathname.match(/^\/product-(egypt|fuji|huangshan|lushan|pojun|sihuang)(?:\.html)?\/?$/);
+        if(/^\/category-(craft|special)(?:\.html)?\/?$/.test(url.pathname))return new Response(null,{status:302,headers:{Location:'/shop.html?category=pen','Cache-Control':'no-store'}});
+        if(legacy)return new Response(null,{status:302,headers:{Location:'/product.html?family='+encodeURIComponent('product-'+legacy[1]),'Cache-Control':'no-store'}});
         response=await env.ASSETS.fetch(request);
         if(env.APP_ENV==='staging'&&response.headers.get('Content-Type')?.includes('text/html')&&!url.pathname.startsWith('/admin'))response=new HTMLRewriter().on('body',{element(el){el.prepend('<aside role="note" style="background:#fff1c2;color:#342300;padding:12px 16px;text-align:center;font:600 16px/1.5 sans-serif">網站建置中｜尚未開放正式收款，請勿匯款。</aside>',{html:true});}}).transform(response);
       }
@@ -308,6 +321,6 @@ export default {
       if(/^\/(member|checkout)(\.html)?\/?$/.test(url.pathname))result.headers.set('Cache-Control','no-store');
       if(/^\/member(\.html)?\/?$/.test(url.pathname))result.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
       return result;
-    }catch(error){if(!(error instanceof HttpError)) console.error("Member request failed", error.name, error.message); return json({success:false,error:error instanceof HttpError||[400,409,503].includes(error.status)?error.message:'服務暫時無法使用，請稍後再試'},error.status||500,env.APP_ENV==='staging'?{'X-Robots-Tag':'noindex, nofollow, noarchive'}:{});}
+    }catch(error){if(error.message?.includes('CHECK constraint failed: ok'))error=new HttpError(409,'資料已變更，請重新整理後再操作');if(!(error instanceof HttpError)) console.error("Member request failed", error.name, error.message); return json({success:false,error:error instanceof HttpError||[400,409,503].includes(error.status)?error.message:'服務暫時無法使用，請稍後再試'},error.status||500,env.APP_ENV==='staging'?{'X-Robots-Tag':'noindex, nofollow, noarchive'}:{});}
   }
 };
