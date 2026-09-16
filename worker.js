@@ -1,3 +1,4 @@
+import {readHomepage,manageHomepage} from './homepage-store.js';
 import {discountQuote,couponStatements} from './modules.js';
 import {expireReservations,checkStock,reserveStatements} from './inventory.js';
 import {methods,start,confirm,reconcilePayments} from './payments.js';
@@ -102,6 +103,7 @@ async function adminApi(request,env,url) {
     return json({success:true},200,{'Set-Cookie':adminCookie('',0)});
   }
   const m=await adminSession(request,env);
+  if(path==='/api/admin/homepage'){if(method!=='GET')await rate(env,`admin-homepage:${m.id}`,60);return json({success:true,...await manageHomepage(request,env,m,body)});}
   if(path.startsWith('/api/admin/')&&!['/api/admin/session','/api/admin/orders','/api/admin/order/status'].includes(path)&&!path.startsWith('/api/admin/orders/')) {
     if(method!=='GET')await rate(env,`admin-commerce:${m.id}`,120);
     const result=await manageCommerce(request,env,url,m,body);if(result!==null)return json({success:true,...result});
@@ -182,6 +184,7 @@ async function consumeEmailToken(request,env,purpose) {
 }
 async function api(request,env,url,ctx) {
   const path=url.pathname,method=request.method;
+  if(path==='/api/homepage'&&method==='GET')return json({success:true,...await readHomepage(env)});
   if(['/api/catalog','/api/categories'].includes(path)&&method==='GET')return json({success:true,...await publicCommerce(request,env,url)});
   if(path==='/api/payments/ecpay/notify')return notify(request,env);
   if(!['GET','HEAD'].includes(method)&&(request.headers.get('Origin')!==url.origin||request.headers.get('Sec-Fetch-Site')==='cross-site')) fail(403,'請從本站頁面操作');
@@ -300,7 +303,8 @@ export default {
     const url=new URL(request.url);
     try{
       let response;
-      if(url.pathname.startsWith('/media/'))response=await publicCommerce(request,env,url)||new Response(null,{status:404});
+      if(url.pathname==='/'&&url.searchParams.get('homepage-preview')==='1'&&!await adminSession(request,env,false))response=new Response(null,{status:303,headers:{Location:'/admin-login.html','Cache-Control':'no-store'}});
+      else if(url.pathname.startsWith('/media/'))response=await publicCommerce(request,env,url)||new Response(null,{status:404});
       else if(url.pathname.startsWith('/api/'))response=await api(request,env,url,ctx);
       else if((/^\/admin(?:\/|$)/i.test(url.pathname)||/^\/admin-(?!login(?:\.html)?\/?$)[^/.]+(?:\.html)?\/?$/i.test(url.pathname))&&!await adminSession(request,env,false))response=new Response(null,{status:303,headers:{Location:'/admin-login.html','Cache-Control':'no-store'}});
       else if(env.APP_ENV==='staging'&&url.pathname==='/robots.txt')response=new Response('User-agent: *\nDisallow: /\n',{headers:{'Content-Type':'text/plain; charset=utf-8'}});
@@ -316,9 +320,10 @@ export default {
       result.headers.set('X-Content-Type-Options','nosniff');result.headers.set('Referrer-Policy','same-origin');result.headers.set('X-Frame-Options','DENY');
       if(/^\/(?:admin|api\/admin)/i.test(url.pathname)||['/api/orders','/api/order/status'].includes(url.pathname)) {
         result.headers.set('Cache-Control','no-store');result.headers.set('X-Robots-Tag','noindex, nofollow, noarchive');
-        result.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-src https://www.youtube-nocookie.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+        result.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
       }
       if(env.APP_ENV==='staging')result.headers.set('X-Robots-Tag','noindex, nofollow, noarchive');
+      if(url.pathname==='/'&&url.searchParams.get('homepage-preview')==='1'){result.headers.set('X-Frame-Options','SAMEORIGIN');result.headers.set('Content-Security-Policy',"frame-ancestors 'self'");result.headers.set('Cache-Control','no-store');result.headers.set('X-Robots-Tag','noindex, nofollow, noarchive');}
       if(/^\/(member|checkout)(\.html)?\/?$/.test(url.pathname))result.headers.set('Cache-Control','no-store');
       if(/^\/member(\.html)?\/?$/.test(url.pathname))result.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
       return result;

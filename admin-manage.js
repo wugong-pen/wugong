@@ -1,4 +1,5 @@
 export async function init({api,node,message}){
+ if(await (await import('./admin-homepage.js')).init({api,node,message}))return;
  if(await (await import('./admin-modules.js')).init({api,node,message}))return;
  const $=id=>document.getElementById(id),view=$('manage-view'),editor=$('editor'),section=new URLSearchParams(location.search).get('section')||'products';let page=1,query='',busy=false;
  const titles={products:'商品管理',stock:'庫存管理',members:'會員管理',audit:'操作紀錄'};$('heading').textContent=titles[section]||'商品管理';
@@ -34,7 +35,7 @@ export async function init({api,node,message}){
   const endpoint=section==='members'?'members':section==='audit'?'audit':'products';const d=await api('/api/admin/'+endpoint+'?'+new URLSearchParams({q:query,page}));
   if(endpoint==='products')table(['商品／規格','代碼','售價','狀態','可售','已售','操作'],d.products,p=>[p.name+'\n'+p.variant,p.sku,'NT$ '+p.price.toLocaleString(),p.active?'上架':'下架',p.available,p.sold,button(section==='stock'?'調整庫存':'編輯',()=>section==='stock'?stock(p):product(p))]);
   else if(endpoint==='members')table(['姓名','信箱','國家','狀態','訂單','操作'],d.members,m=>[m.name,m.email,m.country,m.active?'啟用':'停用',m.order_count,button('查看／管理',()=>member(m).catch(e=>message(e.message)))]);
-  else table(['時間','操作','對象','異動前 → 後','原因'],d.records,r=>[new Date(r.created_at).toLocaleString('zh-TW'),({'product.create':'新增商品','product.update':'編輯商品','stock.adjust':'庫存異動','member.status':'會員狀態','order.notes':'訂單備註'})[r.action]||r.action,r.target,r.before_value+' → '+r.after_value,r.reason]);
+  else table(['時間','操作','對象','異動前 → 後','原因'],d.records,r=>[new Date(r.created_at).toLocaleString('zh-TW'),({'homepage.update':'首頁編輯','product.create':'新增商品','product.update':'編輯商品','stock.adjust':'庫存異動','member.status':'會員狀態','order.notes':'訂單備註'})[r.action]||r.action,r.target,r.before_value+' → '+r.after_value,r.reason]);
   const nav=node('div');nav.className='toolbar';const prev=button('上一頁',()=>{page--;load().catch(e=>message(e.message));}),next=button('下一頁',()=>{page++;load().catch(e=>message(e.message));});prev.disabled=page===1;next.disabled=!d.hasMore;nav.append(prev,node('span','第 '+page+' 頁'),next);view.append(nav);message('');
  }await load();
 }

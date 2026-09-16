@@ -1,5 +1,24 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {readFileSync} from 'node:fs';import {createHash} from 'node:crypto';import worker from './worker.js';import {catalogQuote,catalogGuards} from './commerce.js';
-function setup(){const sql=new DatabaseSync(':memory:');sql.exec('CREATE TABLE orders(id INTEGER PRIMARY KEY,order_number TEXT UNIQUE,customer_name TEXT,phone TEXT,email TEXT,address TEXT,shipping TEXT,payment TEXT,note TEXT,items TEXT,total INTEGER,status TEXT,created_at TEXT)');for(const f of ['schema-members.sql','schema-admin.sql','schema-checkout.sql','schema-payments.sql','schema-commerce.sql','seed-inventory-staging.sql','seed-products.sql'])sql.exec(readFileSync(new URL(f,import.meta.url),'utf8'));
+import {defaults} from './homepage-config.js';
+test('homepage saves persist, require admin and same origin, reject invalid settings and stale updates',async()=>{
+ const {sql,call}=setup(),config=defaults();
+ assert.equal((await call('/api/homepage','GET',undefined,'')).data.version,0);
+ for(const role of ['','member'])assert.equal((await call('/api/admin/homepage','POST',{config,version:0},role)).status,403);
+ assert.equal((await call('/api/admin/homepage','POST',{config,version:0},'admin',{Origin:'https://evil.test'})).status,403);
+ config.texts.title.text='新的首頁 <img src=x onerror=alert(1)>';
+ const saved=await call('/api/admin/homepage','POST',{config,version:0});assert.equal(saved.status,200);assert.equal(saved.data.version,1);
+ assert.equal((await call('/api/homepage','GET',undefined,'')).data.config.texts.title.text,config.texts.title.text);
+ assert.equal((await call('/api/admin/homepage','POST',{config,version:0})).status,409);
+ assert.equal((await call('/api/admin/homepage','POST',{config:{...config,image:'https://other.test/photo.jpg'},version:1})).status,400);
+ assert.equal((await call('/api/admin/homepage','POST',{config:{...config,image:'/media/'+'0'.repeat(64)},version:1})).status,400);
+ for(const invalid of [{size:999},{color:'red;display:none'},{font:'__proto__'}]){const bad=structuredClone(config);Object.assign(bad.texts.title,invalid);assert.equal((await call('/api/admin/homepage','POST',{config:bad,version:1})).status,400);}
+ config.background='#223344';assert.equal((await call('/api/admin/homepage','POST',{config,version:1})).data.version,2);
+ assert.equal((await call('/api/admin/homepage','GET')).data.config.background,'#223344');
+ assert.equal(sql.prepare("SELECT count(*) n FROM commerce_audit WHERE action='homepage.update'").get().n,2);
+ assert.equal((await call('/?homepage-preview=1','GET',undefined,'')).status,303);
+ sql.close();
+});
+function setup(){const sql=new DatabaseSync(':memory:');sql.exec('CREATE TABLE orders(id INTEGER PRIMARY KEY,order_number TEXT UNIQUE,customer_name TEXT,phone TEXT,email TEXT,address TEXT,shipping TEXT,payment TEXT,note TEXT,items TEXT,total INTEGER,status TEXT,created_at TEXT)');for(const f of ['schema-members.sql','schema-admin.sql','schema-checkout.sql','schema-payments.sql','schema-commerce.sql','schema-homepage.sql','seed-inventory-staging.sql','seed-products.sql'])sql.exec(readFileSync(new URL(f,import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('schema-modules.sql',import.meta.url),'utf8'));sql.exec(readFileSync(new URL('schema-categories-gifts.sql',import.meta.url),'utf8'));sql.exec("UPDATE product_families SET confirmed=1; UPDATE inventory SET available=5 WHERE sku LIKE 'body-%';");
  const DB={prepare(q){let params=[];return{bind(...v){params=v;return this;},async first(){return sql.prepare(q).get(...params)||null;},async all(){return{results:sql.prepare(q).all(...params)};},async run(){return{meta:{changes:sql.prepare(q).run(...params).changes}};}};},async batch(ss){sql.exec('BEGIN');try{const r=[];for(const s of ss)r.push(await s.run());sql.exec('COMMIT');return r;}catch(e){sql.exec('ROLLBACK');throw e;}}};
  for(const id of ['owner','customer'])sql.prepare('INSERT INTO members VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(id,id+'@example.test','password-hash',id,'1990-01-01','TW','','',1,'2026-09-14','2026-09-14');sql.exec("INSERT INTO admin_members VALUES ('owner',1,'now')");const token='a'.repeat(64),hash=createHash('sha256').update(token).digest('hex');sql.prepare('INSERT INTO admin_sessions VALUES (?,?,?,?)').run(hash,'owner','password-hash',Math.floor(Date.now()/1000)+3600);sql.prepare('INSERT INTO member_sessions VALUES (?,?,?)').run(hash,'customer',Math.floor(Date.now()/1000)+3600);
