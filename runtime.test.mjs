@@ -28,7 +28,7 @@ test('Cloudflare runtime supports password hashing and D1 membership',async()=>{
   for(const statement of readFileSync(new URL('./seed-inventory-staging.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'').split(';').filter(s=>s.trim()))await db.prepare(statement).run();
   for(const statement of readFileSync(new URL('./schema-commerce.sql',import.meta.url),'utf8').match(/CREATE TRIGGER[\s\S]*?END;|CREATE (?:TABLE|INDEX)[\s\S]*?;/g))await db.prepare(statement).run();
   for(const statement of readFileSync(new URL('./seed-products.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'').split(';').filter(s=>s.trim()))await db.prepare(statement).run();
-  for(const statement of readFileSync(new URL('./schema-modules.sql',import.meta.url),'utf8').split(';').filter(s=>s.trim()))await db.prepare(statement).run();await db.prepare('UPDATE product_families SET confirmed=1').run();await db.prepare("UPDATE inventory SET available=5 WHERE sku LIKE 'body-%'").run();
+  for(const statement of readFileSync(new URL('./schema-modules.sql',import.meta.url),'utf8').split(';').filter(s=>s.trim()))await db.prepare(statement).run();for(const statement of readFileSync(new URL('./schema-categories-gifts.sql',import.meta.url),'utf8').split(';').filter(s=>s.trim()))await db.prepare(statement).run();await db.prepare('UPDATE product_families SET confirmed=1').run();await db.prepare("UPDATE inventory SET available=5 WHERE sku LIKE 'body-%'").run();
  const payload={customer:{name:'測試',phone:'0000000000',address:'測試地址',country:'TW'},items:[{id:'pojun-單尖',nib:'單尖',price:1,quantity:1}],expectedTotal:25000,payment:'bank',shipping:'宅配'};
   const orderResponse=await mf.dispatchFetch('https://shop.test/api/order',{method:'POST',headers:{Origin:'https://shop.test','Content-Type':'application/json',Cookie:cookie,'Idempotency-Key':'runtime-payment-0001'},body:JSON.stringify(payload)});
   const order=await orderResponse.json();assert.equal(orderResponse.status,200,JSON.stringify(order));
@@ -68,7 +68,7 @@ test('Cloudflare runtime supports password hashing and D1 membership',async()=>{
   const couponOrders=await Promise.all(Array.from({length:5},(_,i)=>post('/api/order',discounted,{...headers,'Idempotency-Key':'coupon-concurrent-'+i})));
   assert.equal(couponOrders.filter(r=>r.status===200).length,1,JSON.stringify(couponOrders));assert.equal(couponOrders.filter(r=>r.status===409).length,4,JSON.stringify(couponOrders));
   assert.equal((await db.prepare("SELECT available FROM inventory WHERE sku='body-product-egypt'").first()).available,4);
-  assert.equal((await db.prepare('SELECT count(*) n FROM coupon_claims').first()).n,1);
+  assert.equal((await db.prepare('SELECT count(*) n FROM promotion_claims').first()).n,1);
   const png=new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6v1UAAAAASUVORK5CYII=','base64'));
   const uploaded=await mf.dispatchFetch('https://shop.test/api/admin/images',{method:'POST',headers:{...adminHeaders,'Content-Type':'image/png'},body:png});assert.equal(uploaded.status,200);const uploadedData=await uploaded.json();const media=await mf.dispatchFetch('https://shop.test'+uploadedData.url);assert.deepEqual(new Uint8Array(await media.arrayBuffer()),png);
  }finally{await mf.dispose();}

@@ -11,7 +11,7 @@ function database(){
  sql.exec(readFileSync(new URL('./schema-commerce.sql',import.meta.url),'utf8'));
 
  for(const file of ['schema-payments.sql','schema-checkout.sql','seed-inventory-staging.sql','seed-products.sql'])sql.exec(readFileSync(new URL('./'+file,import.meta.url),'utf8'));
- sql.exec(readFileSync(new URL('schema-modules.sql',import.meta.url),'utf8'));sql.exec("UPDATE product_families SET confirmed=1; UPDATE inventory SET available=5 WHERE sku LIKE 'body-%';");
+ sql.exec(readFileSync(new URL('schema-modules.sql',import.meta.url),'utf8'));sql.exec(readFileSync(new URL('schema-categories-gifts.sql',import.meta.url),'utf8'));sql.exec("UPDATE product_families SET confirmed=1; UPDATE inventory SET available=5 WHERE sku LIKE 'body-%';");
  const prepare=(query)=>{let params=[];return{bind(...values){params=values;return this;},async first(){return sql.prepare(query).get(...params)||null;},async all(){return {results:sql.prepare(query).all(...params)};},async run(){const result=sql.prepare(query).run(...params);return{meta:{changes:result.changes}};}};};
  return{sql,prepare,async batch(statements){sql.exec('BEGIN');try{const results=[];for(const statement of statements)results.push(await statement.run());sql.exec('COMMIT');return results;}catch(e){sql.exec('ROLLBACK');throw e;}}};
 }

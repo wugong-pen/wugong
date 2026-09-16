@@ -182,7 +182,7 @@ async function consumeEmailToken(request,env,purpose) {
 }
 async function api(request,env,url,ctx) {
   const path=url.pathname,method=request.method;
-  if(path==='/api/catalog'&&method==='GET')return json({success:true,...await publicCommerce(request,env,url)});
+  if(['/api/catalog','/api/categories'].includes(path)&&method==='GET')return json({success:true,...await publicCommerce(request,env,url)});
   if(path==='/api/payments/ecpay/notify')return notify(request,env);
   if(!['GET','HEAD'].includes(method)&&(request.headers.get('Origin')!==url.origin||request.headers.get('Sec-Fetch-Site')==='cross-site')) fail(403,'請從本站頁面操作');
   if(path.startsWith('/api/admin/')||path==='/api/orders'||path==='/api/order/status')return adminApi(request,env,url);
@@ -280,13 +280,13 @@ async function api(request,env,url,ctx) {
     sandbox(env);
     await expireReservations(env);
     const q=await discountQuote(env,await catalogQuote(env,order.items),order.coupon,m.id),{items,total}=q,number='WG'+random().slice(0,18);
-    if(c.country!=='TW'&&items.some(i=>i.category==='ink'))fail(400,'墨水僅寄送台灣，請移除墨水商品後再結帳');
+    if(c.country!=='TW'&&(items.some(i=>i.category==='ink')||q.coupon?.kind==='gift'&&q.coupon.gift_kind==='ink'))fail(400,'墨水（含贈品）僅寄送台灣，請移除墨水商品或更換優惠券後再結帳');
     const shipping=text(order.shipping??'',40,'配送方式',false),payment=text(order.payment,30,'付款方式'),note=text(order.note??'',1000,'備註',false);
     if(methods(env,c.country)[payment]!==true)fail(400,'此付款方式尚未設定或不適用收件國家');
     if(order.expectedTotal!==total)fail(409,'商品金額已更新，請重新整理後確認');
     try{await env.DB.batch([
       ...catalogGuards(env,items),
-      env.DB.prepare('INSERT INTO orders(order_number,customer_name,phone,email,address,shipping,payment,note,items,total,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(number,name,phone,m.email,address,shipping,payment,note,JSON.stringify(items),total,'pending',new Date().toISOString()),
+      env.DB.prepare('INSERT INTO orders(order_number,customer_name,phone,email,address,shipping,payment,note,items,total,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(number,name,phone,m.email,address,shipping,payment,note+(q.gift?'\n優惠券贈品：'+q.gift:''),JSON.stringify(items),total,'pending',new Date().toISOString()),
       env.DB.prepare('INSERT INTO member_orders(order_number,member_id,shipping_country,request_key) VALUES (?,?,?,?)').bind(number,m.id,c.country,key),
       ...reserveStatements(env,number,items,payment),...couponStatements(env,q,m.id,number)
     ]);}catch(error){const retry=await env.DB.prepare('SELECT order_number FROM member_orders WHERE member_id=? AND request_key=?').bind(m.id,key).first();if(!retry){if(error.message?.includes('CHECK constraint failed: quantity'))fail(409,'商品庫存不足，請調整數量後再試');throw error;}return json({success:true,orderNumber:retry.order_number});}

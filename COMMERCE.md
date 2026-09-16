@@ -29,3 +29,13 @@ Apply schema-modules.sql before deploying this revision. It creates shared body 
 Reference for familiar coupon controls: https://help.shopify.com/en/manual/discounts/discount-types/percentage-fixed-amount and https://help.shopify.com/en/manual/discounts/discounts-faq . The owner's single-coupon and once-per-member rules take precedence.
 
 Validation: 28 tests, including Workers/D1 concurrent coupon orders, shared body stock across nibs, failed-transaction rollback, expiry, settlement, safe video parsing and product copies. All browser JavaScript files were syntax checked. Local browser checks verified login, adding a nib, its appearance in product choices, coupon draft saving, stock confirmation and draft preview. No sample coupons or synthetic nibs are added to the deployed database.
+
+## Brand categories and gift coupons (2026-09-16)
+
+Apply schema-categories-gifts.sql after schema-modules.sql before deploying this revision. The additive migration retains the original coupon tables and copies existing settings/claims once into promotions/promotion_claims; the marker prevents expired claims from being reimported. Do not roll back to the old coupon code after creating new promotions without reconciling uses.
+
+Categories have a brand parent and a stable product type (pen/ink/craft) that preserves nib and overseas ink rules. Seeded brands: 吾鋼 WUGONG and 藏娥; six owner-specified child categories. Existing products remain unclassified until the administrator chooses a child category. Category pages use /shop.html?category=<id>; new categories and brand filters appear automatically. Product copies retain classification.
+
+Gift coupons use kind=gift, amount=0, maximum=0 and a required gift_text. gift_kind=ink blocks overseas orders. Text-only gifts are manually fulfilled and do not reserve inventory. Order gift snapshots and order notes retain the original description after later coupon edits. Existing quota, expiry, member-use, scope and minimum rules still apply.
+
+Validation: 31 automated tests passed, including Workers/D1 concurrent coupon claims, additive migration repeatability, category filtering/copying, zero-discount gift orders and overseas gift restrictions. Local UI verified saving a gift coupon, adding a category, assigning a product and opening its generated category page.

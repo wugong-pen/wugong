@@ -6,7 +6,7 @@ export async function expireReservations(env){
  await env.DB.batch([
   env.DB.prepare(`UPDATE inventory SET available=available+COALESCE((SELECT SUM(quantity) FROM checkout_lines WHERE sku=inventory.sku AND order_number IN (SELECT order_number FROM checkout_reservations WHERE ${eligible})),0)`).bind(stamp),
   env.DB.prepare(`UPDATE checkout_reservations SET state='released' WHERE ${eligible}`).bind(stamp),
-  env.DB.prepare("DELETE FROM coupon_claims WHERE order_number IN (SELECT order_number FROM checkout_reservations WHERE state='released')"),
+  env.DB.prepare("DELETE FROM promotion_claims WHERE order_number IN (SELECT order_number FROM checkout_reservations WHERE state='released')"),
   env.DB.prepare("UPDATE orders SET status='expired' WHERE status='pending' AND EXISTS(SELECT 1 FROM checkout_reservations r WHERE r.order_number=orders.order_number AND r.state='released')")
  ]);
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {readFileSync} from 'node:fs';import {createHash} from 'node:crypto';import worker from './worker.js';import {catalogQuote,catalogGuards} from './commerce.js';
 function setup(){const sql=new DatabaseSync(':memory:');sql.exec('CREATE TABLE orders(id INTEGER PRIMARY KEY,order_number TEXT UNIQUE,customer_name TEXT,phone TEXT,email TEXT,address TEXT,shipping TEXT,payment TEXT,note TEXT,items TEXT,total INTEGER,status TEXT,created_at TEXT)');for(const f of ['schema-members.sql','schema-admin.sql','schema-checkout.sql','schema-payments.sql','schema-commerce.sql','seed-inventory-staging.sql','seed-products.sql'])sql.exec(readFileSync(new URL(f,import.meta.url),'utf8'));
- sql.exec(readFileSync(new URL('schema-modules.sql',import.meta.url),'utf8'));sql.exec("UPDATE product_families SET confirmed=1; UPDATE inventory SET available=5 WHERE sku LIKE 'body-%';");
+ sql.exec(readFileSync(new URL('schema-modules.sql',import.meta.url),'utf8'));sql.exec(readFileSync(new URL('schema-categories-gifts.sql',import.meta.url),'utf8'));sql.exec("UPDATE product_families SET confirmed=1; UPDATE inventory SET available=5 WHERE sku LIKE 'body-%';");
  const DB={prepare(q){let params=[];return{bind(...v){params=v;return this;},async first(){return sql.prepare(q).get(...params)||null;},async all(){return{results:sql.prepare(q).all(...params)};},async run(){return{meta:{changes:sql.prepare(q).run(...params).changes}};}};},async batch(ss){sql.exec('BEGIN');try{const r=[];for(const s of ss)r.push(await s.run());sql.exec('COMMIT');return r;}catch(e){sql.exec('ROLLBACK');throw e;}}};
  for(const id of ['owner','customer'])sql.prepare('INSERT INTO members VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(id,id+'@example.test','password-hash',id,'1990-01-01','TW','','',1,'2026-09-14','2026-09-14');sql.exec("INSERT INTO admin_members VALUES ('owner',1,'now')");const token='a'.repeat(64),hash=createHash('sha256').update(token).digest('hex');sql.prepare('INSERT INTO admin_sessions VALUES (?,?,?,?)').run(hash,'owner','password-hash',Math.floor(Date.now()/1000)+3600);sql.prepare('INSERT INTO member_sessions VALUES (?,?,?)').run(hash,'customer',Math.floor(Date.now()/1000)+3600);
  const env={DB,APP_ENV:'staging',BANK_TEST_CONFIG:JSON.stringify({bank:'test',code:'test',branch:'test',holder:'test',account:'test',days:3})};
@@ -42,9 +42,47 @@ test('coupon eligibility, caps, one use per member, atomic quota, expiry release
  await assert.rejects(async()=>discountQuote(env,await catalogQuote(env,[items[1]]),'SAVE','customer'));
  const create=(id,member,quote)=>env.DB.batch([env.DB.prepare("INSERT INTO orders(order_number,total,status,payment) VALUES (?,?,'pending','paypal')").bind(id,quote.total),...reserveStatements(env,id,quote.items,'paypal'),...couponStatements(env,quote,member,id)]);
  await create('COUPON1','customer',q);await assert.rejects(()=>create('COUPON2','other',q));assert.equal(sql.prepare("SELECT count(*) n FROM orders WHERE order_number='COUPON2'").get().n,0);await assert.rejects(async()=>discountQuote(env,await catalogQuote(env,items),'SAVE','customer'));
- sql.exec("UPDATE checkout_reservations SET expires_at='2000-01-01'");await expireReservations(env);assert.equal(sql.prepare('SELECT count(*) n FROM coupon_claims').get().n,0);
- const again=await discountQuote(env,await catalogQuote(env,items),'SAVE','customer');await create('COUPON3','customer',again);await lockPayment(env,'COUPON3');await settlePayment(env,{order_number:'COUPON3',total:again.total},'paypal','coupon-paid');await expireReservations(env);assert.equal(sql.prepare('SELECT count(*) n FROM coupon_claims').get().n,1);
+ sql.exec("UPDATE checkout_reservations SET expires_at='2000-01-01'");await expireReservations(env);assert.equal(sql.prepare('SELECT count(*) n FROM promotion_claims').get().n,0);
+ const again=await discountQuote(env,await catalogQuote(env,items),'SAVE','customer');await create('COUPON3','customer',again);await lockPayment(env,'COUPON3');await settlePayment(env,{order_number:'COUPON3',total:again.total},'paypal','coupon-paid');await expireReservations(env);assert.equal(sql.prepare('SELECT count(*) n FROM promotion_claims').get().n,1);
  assert.equal(sql.prepare("SELECT discount FROM order_discounts WHERE order_number='COUPON1'").get().discount,2500);
  assert.equal((await call('/api/admin/coupon','POST',{...c,version:1,kind:'fixed',amount:999999,maximum:3000,quota:2})).status,200);const cap=await discountQuote(env,await catalogQuote(env,items),'SAVE','other').catch(e=>e);assert.equal(cap.discount,3000);sql.close();
 });
 test('YouTube embed parser accepts video identifiers and rejects arbitrary embeds',()=>{assert.equal(youtube('https://youtu.be/dQw4w9WgXcQ'),'dQw4w9WgXcQ');assert.equal(youtube('<iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ"></iframe>'),'dQw4w9WgXcQ');assert.throws(()=>youtube('<script>alert(1)</script>'));assert.throws(()=>youtube('https://evil.test/embed/dQw4w9WgXcQ'));});
+
+test('brand categories reach public pages, copied products and coupon eligibility without losing ink restrictions',async()=>{
+ const {sql,env,call}=setup();assert.equal((await call('/api/categories','GET',undefined,'')).data.categories.length,8);
+ assert.equal((await call('/api/admin/categories','POST',{name:'非法',version:0},'member')).status,403);
+ const created=await call('/api/admin/categories','POST',{name:'新系列',parent:'wugong',kind:'ink',version:0});assert.equal(created.status,200);const id=created.data.id;
+ assert.equal((await call('/api/admin/categories','POST',{name:'子子分類',parent:id,kind:'pen',version:0})).status,400);
+ const product={sku:'category-ink',family:'category-ink',name:'分類墨水',variant:'藍色',category:'craft',category_id:id,price:600,active:1,images:[],version:0};
+ assert.equal((await call('/api/admin/product','POST',product)).status,200);
+ assert.equal((await call('/api/catalog?category='+id)).data.products[0].category,'ink');
+ assert.equal((await call('/api/catalog?category=wugong')).data.products.length,1);
+ const copied=await call('/api/admin/copy-product','POST',{family:product.family});assert.equal(sql.prepare('SELECT category_id FROM product_categories WHERE sku=?').get(copied.data.family+'-0').category_id,id);
+ const coupon={code:'BRAND',kind:'fixed',amount:100,minimum:0,maximum:100,scope:'category',target:'wugong',starts:new Date(Date.now()-60000).toISOString(),ends:new Date(Date.now()+86400000).toISOString(),quota:10,active:1,version:0};
+ assert.equal((await call('/api/admin/coupon','POST',coupon)).status,200);assert.equal((await discountQuote(env,await catalogQuote(env,[{id:product.sku,nib:'藍色',quantity:1}]),'BRAND','customer')).discount,100);
+ assert.equal((await call('/api/admin/categories','POST',{id,name:'新名稱',parent:'wugong',kind:'ink',version:1})).status,200);
+ assert.equal((await call('/api/admin/categories','POST',{id,name:'新名稱',parent:'wugong',kind:'pen',version:2})).status,400);
+ assert.equal((await call('/api/admin/product','POST',{...product,version:1,category_id:'missing'})).status,400);sql.close();
+});
+
+test('zero-value gift coupons create immutable order gifts, retain usage guards and reject overseas ink gifts',async()=>{
+ const {sql,env,call}=setup(),c={code:'GIFT',kind:'gift',amount:0,maximum:0,minimum:100,scope:'all',target:'',gift_text:'贈送 wugong 墨水 1 瓶',gift_kind:'ink',starts:new Date(Date.now()-60000).toISOString(),ends:new Date(Date.now()+86400000).toISOString(),quota:1,active:1,version:0};
+ assert.equal((await call('/api/admin/coupon','POST',{...c,gift_text:''})).status,400);assert.equal((await call('/api/admin/coupon','POST',c)).status,200);
+ const items=[{id:'product-fuji',nib:'WUGONG 筆尖',quantity:1}],q=await discountQuote(env,await catalogQuote(env,items),'GIFT','customer');assert.equal(q.discount,0);assert.equal(q.total,120000);assert.equal(q.gift,c.gift_text);
+ const order={customer:{name:'test',country:'JP',address:'test',phone:'test'},items,payment:'bank',expectedTotal:q.total,coupon:'GIFT'};
+ assert.equal((await call('/api/order','POST',order,'member',{'Idempotency-Key':'gift-overseas-order'})).status,400);
+ const r=await call('/api/order','POST',{...order,customer:{...order.customer,country:'TW'}},'member',{'Idempotency-Key':'gift-domestic-order'});assert.equal(r.status,200,JSON.stringify(r.data));
+ const detail=await call('/api/admin/order-management?order='+r.data.orderNumber);assert.equal(detail.data.gift.description,c.gift_text);assert.equal(detail.data.discount.discount,0);
+ assert.ok(sql.prepare('SELECT note FROM orders WHERE order_number=?').get(r.data.orderNumber).note.includes(c.gift_text));
+ await assert.rejects(async()=>discountQuote(env,await catalogQuote(env,items),'GIFT','customer'));
+ assert.equal((await call('/api/admin/coupon','POST',{...c,version:1,gift_text:'新贈品'})).status,200);
+ assert.equal(sql.prepare('SELECT description FROM order_gifts WHERE order_number=?').get(r.data.orderNumber).description,c.gift_text);
+ sql.exec("UPDATE checkout_reservations SET expires_at='2000-01-01'");await expireReservations(env);assert.equal(sql.prepare('SELECT count(*) n FROM promotion_claims').get().n,0);assert.equal(sql.prepare('SELECT count(*) n FROM order_gifts').get().n,1);sql.close();
+});
+
+test('additive coupon migration preserves existing uses and rerunning never resurrects expired claims',()=>{
+ const {sql}=setup();sql.exec("DELETE FROM commerce_migrations; INSERT INTO orders(order_number) VALUES ('OLD'); INSERT INTO coupons VALUES ('OLD', 'fixed', 100, 0, 100, 'all', '', '2026-01-01', '2027-01-01', 10, 1, 3); INSERT INTO coupon_claims VALUES ('OLD','customer','OLD',100)");
+ const migration=readFileSync(new URL('schema-categories-gifts.sql',import.meta.url),'utf8');sql.exec(migration);assert.equal(sql.prepare("SELECT version FROM promotions WHERE code='OLD'").get().version,3);assert.equal(sql.prepare('SELECT count(*) n FROM promotion_claims').get().n,1);
+ sql.exec("DELETE FROM promotion_claims; UPDATE promotions SET amount=200 WHERE code='OLD'");sql.exec(migration);assert.equal(sql.prepare('SELECT count(*) n FROM promotion_claims').get().n,0);assert.equal(sql.prepare("SELECT amount FROM promotions WHERE code='OLD'").get().amount,200);sql.close();
+});

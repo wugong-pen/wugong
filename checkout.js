@@ -14,7 +14,7 @@ const couponPanel=document.createElement('div');couponPanel.innerHTML='<label fo
 $('orderItems').after(couponPanel);
 $('applyCoupon').onclick=async()=>{
  if(busy||pendingOrder)return;busy=true;$('submitOrder').disabled=true;$('applyCoupon').disabled=true;
- try{const r=await fetch('/api/checkout/quote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:cart(),coupon:$('checkoutCoupon').value.trim()})}),d=await r.json();if(!r.ok)throw Error(d.error);couponCode=d.coupon||'';expectedTotal=d.total;$('subtotal').textContent='NT$'+d.subtotal.toLocaleString();$('total').textContent='NT$'+d.total.toLocaleString();$('couponSummary').textContent=couponCode?'已套用 '+couponCode+'，折抵 NT$'+d.discount.toLocaleString():'未使用優惠券';show('結帳金額已更新。');}catch(e){show(e.message);}finally{busy=false;$('applyCoupon').disabled=false;await updateMethods();}
+ try{const r=await fetch('/api/checkout/quote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:cart(),coupon:$('checkoutCoupon').value.trim()})}),d=await r.json();if(!r.ok)throw Error(d.error);couponCode=d.coupon||'';expectedTotal=d.total;$('subtotal').textContent='NT$'+d.subtotal.toLocaleString();$('total').textContent='NT$'+d.total.toLocaleString();$('couponSummary').textContent=couponCode?'已套用 '+couponCode+'，折抵 NT$'+d.discount.toLocaleString()+(d.gift?'；贈送商品：'+d.gift:''):'未使用優惠券';show('結帳金額已更新。');}catch(e){show(e.message);}finally{busy=false;$('applyCoupon').disabled=false;await updateMethods();}
 };
 
 countryOptions($('country'));render();

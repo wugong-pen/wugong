@@ -7,7 +7,7 @@ import {confirm,reconcilePayments} from './payments.js';
 function setup(){
  const sql=new DatabaseSync(':memory:');
  sql.exec('CREATE TABLE orders(order_number TEXT PRIMARY KEY,total INTEGER,status TEXT,payment TEXT,items TEXT);');
- for(const name of ['schema-payments.sql','schema-checkout.sql','seed-inventory-staging.sql','schema-commerce.sql','schema-modules.sql'])sql.exec(readFileSync(new URL(name,import.meta.url),'utf8'));
+ for(const name of ['schema-payments.sql','schema-checkout.sql','seed-inventory-staging.sql','schema-commerce.sql','schema-modules.sql','schema-categories-gifts.sql'])sql.exec(readFileSync(new URL(name,import.meta.url),'utf8'));
  const DB={prepare(q){let a=[];return{bind(...v){a=v;return this;},async first(){return sql.prepare(q).get(...a)||null;},async all(){return{results:sql.prepare(q).all(...a)};},async run(){return{meta:{changes:sql.prepare(q).run(...a).changes}};}};},async batch(statements){sql.exec('BEGIN');try{const r=[];for(const s of statements)r.push(await s.run());sql.exec('COMMIT');return r;}catch(e){sql.exec('ROLLBACK');throw e;}}};
  const env={DB,APP_ENV:'staging',PAYPAL_SANDBOX_CLIENT_ID:'test',PAYPAL_SANDBOX_CLIENT_SECRET:'test'};
  const item={id:'product-fuji',quantity:1};
