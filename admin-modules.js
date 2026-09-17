@@ -1,8 +1,9 @@
+import {youtubeId} from './content-model.js';
 export async function init({api,node,message}){
  const section=new URLSearchParams(location.search).get('section'),view=document.getElementById('manage-view'),editor=document.getElementById('editor');
  if(!['stock','nibs','coupons','categories'].includes(section))return false;
  document.getElementById('heading').textContent={stock:'筆款共用庫存與影片',nibs:'尖型管理',coupons:'優惠券管理',categories:'品牌／商品分類'}[section];
- const button=(label,fn)=>{const b=node('button',label);b.type='button';b.onclick=()=>Promise.resolve(fn()).catch(e=>message(e.message));return b;};
+ const button=(label,fn)=>{const b=node('button',label);b.type='button';b.onclick=async()=>{try{await fn();}catch(e){message(e.message);}};return b;};
  function field(f,label,value='',type='text'){const l=node('label',label),i=node(type==='textarea'?'textarea':'input');if(type!=='textarea')i.type=type;i.value=value;l.append(i);f.append(l);return i;}
  function select(f,label,value,options){const l=node('label',label),i=node('select');for(const [v,t]of options){const o=node('option',t);o.value=v;i.append(o);}i.value=value;l.append(i);f.append(l);return i;}
  function form(title){editor.replaceChildren();const f=node('form');f.className='manage-form';f.append(node('h2',title));editor.append(f);f.scrollIntoView({behavior:'smooth'});return f;}
@@ -11,7 +12,9 @@ export async function init({api,node,message}){
  async function stock(p){const f=form(p.name+'｜共用筆身');f.append(node('p',p.confirmed?`可售 ${p.available} 件，已售 ${p.sold} 件。各尖型共用此數量。`:`待核對：舊規格庫存合計 ${p.legacy_available}，僅供查閱，不能視為筆身數量。請填入實際可售筆身數量，排除未完成訂單已保留的筆身。`));
   const delta=field(f,p.confirmed?'增減數量（入庫正數、盤損負數）':'實際可售筆身數量',0,'number');delta.min=p.confirmed?-100000:0;delta.max=100000;
   const reason=field(f,'庫存核對／異動原因','','textarea'),threshold=field(f,'低庫存提醒門檻',p.threshold,'number');threshold.min=0;threshold.max=100000;
-  const video=field(f,'YouTube 網址或嵌入碼',p.video?'https://youtu.be/'+p.video:'','textarea');
+  const video=field(f,'YouTube 網址或嵌入碼',p.video?'https://youtu.be/'+p.video:'','textarea');video.maxLength=4000;
+  f.append(node('p','影片會直接嵌入商品頁播放。貼上 YouTube 分享網址或 iframe 嵌入程式碼即可；若只更新影片，庫存增減填 0，原因填「更新商品影片」。'));
+  const videoPreview=node('div');f.append(button('預覽商品影片',()=>{videoPreview.replaceChildren();if(!video.value.trim())return;const frame=node('iframe');frame.src='https://www.youtube-nocookie.com/embed/'+youtubeId(video.value);frame.title='商品影片預覽';frame.allowFullscreen=true;frame.allow='encrypted-media; picture-in-picture; fullscreen';frame.referrerPolicy='strict-origin-when-cross-origin';frame.style.cssText='width:100%;aspect-ratio:16/9;border:0';videoPreview.append(frame);}),videoPreview);
   submit(f,()=>api('/api/admin/family','POST',{family:p.family,version:p.version,expected:p.available,delta:Number(delta.value),reason:reason.value,threshold:Number(threshold.value),video:video.value,confirm:true}));
  }
  function nib(p={name:'',active:1}){const f=form('尖型設定'),name=field(f,'尖型名稱',p.name);name.required=true;name.maxLength=100;name.readOnly=!!p.name;const active=select(f,'是否供商品選用',String(p.active),[['1','啟用'],['0','停用']]);f.append(node('p','停用後不供新訂單選擇，舊訂單規格保留。要使用不同名稱，請新增尖型後再設定商品。'));submit(f,()=>api('/api/admin/nibs','POST',{name:name.value,active:Number(active.value)}));}

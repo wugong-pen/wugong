@@ -1,3 +1,4 @@
+import {youtubeId} from './content-model.js';
 export const textFields = [
  ['kicker','主視覺上方小標','#home .hero-kicker','HANDCRAFTED IN TAIWAN',14,'#d7b36a','sans'],
  ['title','主標題','#home h1','WUGONG',96,'#f5f1e8','serif'],
@@ -16,7 +17,7 @@ export const textFields = [
  ['craft','工藝介紹內容','#craft > p','真正的工藝不只是外觀，而是對每一道工序的堅持。\n從設計草圖開始，經過加工、研磨、組裝與細節修整，WUGONG 希望讓每一件作品，都能在時間中持續留下質感。',18,'#ddd2bf','sans']
 ];
 export const fonts={sans:'"Noto Sans TC",Arial,sans-serif',serif:'Georgia,"Noto Serif TC",serif',kai:'"標楷體",DFKai-SB,KaiTi,serif'};
-export function defaults(){return {image:'/28731.jpg',imagePosition:'center',overlay:52,background:'#111111',backgroundImage:'',sectionBackground:'#181818',texts:Object.fromEntries(textFields.map(([id,,,text,size,color,font])=>[id,{text,size,color,font}]))};}
+export function defaults(){return {image:'/28731.jpg',imagePosition:'center',overlay:52,background:'#111111',backgroundImage:'',sectionBackground:'#181818',media:[],texts:Object.fromEntries(textFields.map(([id,,,text,size,color,font])=>[id,{text,size,color,font}]))};}
 const bad=message=>{throw Object.assign(new Error(message),{status:400});};
 export function validateHomepage(value){
  if(!value||typeof value!=='object'||Array.isArray(value))bad('首頁設定格式不正確');
@@ -25,7 +26,15 @@ export function validateHomepage(value){
  if(!['center','top','bottom','left','right'].includes(value.imagePosition))bad('照片位置不正確');
  if(!Number.isInteger(value.overlay)||value.overlay<0||value.overlay>90)bad('照片遮罩請設定在 0 至 90');
  const texts={};for(const [id,label] of textFields){const t=value.texts?.[id];if(!t||typeof t.text!=='string'||t.text.length>2000)bad(label+'請使用 2000 字以內的文字');if(!Number.isInteger(t.size)||t.size<12||t.size>120)bad(label+'字體大小請設定在 12 至 120');if(!Object.hasOwn(fonts,t.font))bad('請選擇提供的字體');texts[id]={text:t.text,size:t.size,color:color(t.color),font:t.font};}
- return {image:image(value.image),imagePosition:value.imagePosition,overlay:value.overlay,background:color(value.background),backgroundImage:image(value.backgroundImage),sectionBackground:color(value.sectionBackground),texts};
+ const list=value.media??[];if(!Array.isArray(list)||list.length>10)bad('首頁最多 10 組幻燈片或影片');let photos=0;
+ const media=list.map(block=>{if(!block||typeof block.title!=='string'||block.title.length>120)bad('幻燈片／影片標題請在 120 字以內');
+  if(block.type==='youtube')return {type:'youtube',title:block.title,id:youtubeId(block.id)};
+  if(block.type!=='slideshow'||!Array.isArray(block.photos)||block.photos.length<1||block.photos.length>12)bad('每組幻燈片請加入 1 至 12 張照片');
+  if(typeof block.autoplay!=='boolean'||!Number.isInteger(block.interval)||block.interval<3||block.interval>15)bad('輪播間隔請設定在 3 至 15 秒');
+  photos+=block.photos.length;if(photos>36)bad('首頁幻燈片照片合計最多 36 張');
+  return {type:'slideshow',title:block.title,autoplay:block.autoplay,interval:block.interval,photos:block.photos.map(p=>{if(!p||!p.src||typeof p.caption!=='string'||p.caption.length>200)bad('請填寫有效照片及 200 字以內的說明');return {src:image(p.src),caption:p.caption};})};
+ });
+ return {image:image(value.image),imagePosition:value.imagePosition,overlay:value.overlay,background:color(value.background),backgroundImage:image(value.backgroundImage),sectionBackground:color(value.sectionBackground),media,texts};
 }
 export function applyHomepage(config,root=document){
  const c=validateHomepage(config),body=root.querySelector('body'),hero=root.querySelector('#home');

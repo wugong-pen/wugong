@@ -1,10 +1,12 @@
 import {defaults,textFields,validateHomepage} from './homepage-config.js';
+import {renderMediaEditor} from './admin-home-media.js';
 export async function init({api,node,message}){
  if(new URLSearchParams(location.search).get('section')!=='homepage')return false;
  document.getElementById('heading').textContent='首頁編輯';
  const view=document.getElementById('manage-view');
  message('正在讀取首頁設定…');
- const initial=await api('/api/admin/homepage');let saved=structuredClone(initial.config),draft=structuredClone(saved),version=initial.version,dirty=false,busy=false;
+ const initial=await api('/api/admin/homepage');initial.config.media??=[];let saved=structuredClone(initial.config),draft=structuredClone(saved),version=initial.version,dirty=false,busy=false;
+ const mediaStyle=node('link');mediaStyle.rel='stylesheet';mediaStyle.href='/homepage-media.css';document.head.append(mediaStyle);
  const intro=node('p','先修改並預覽，按「儲存首頁」後才會套用到目前網站。字體大小為電腦版上限，大字在手機上會自動縮小。');view.append(intro);
  const actions=node('div');actions.className='form-actions home-actions';const status=node('span','尚無修改');status.setAttribute('role','status');
  const button=(label,fn)=>{const b=node('button',label);b.type='button';b.onclick=fn;return b;};
@@ -19,6 +21,7 @@ export async function init({api,node,message}){
  const desktop=button('電腦預覽',()=>{previewWidth=1200;resize();desktop.setAttribute('aria-pressed','true');phone.setAttribute('aria-pressed','false');});const phone=button('手機預覽',()=>{previewWidth=390;resize();desktop.setAttribute('aria-pressed','false');phone.setAttribute('aria-pressed','true');});desktop.setAttribute('aria-pressed','true');phone.setAttribute('aria-pressed','false');sizes.append(desktop,phone);stage.append(frame);preview.append(sizes,stage);view.append(preview,form);new ResizeObserver(resize).observe(stage);
  function update(){status.textContent=busy?'處理中…':dirty?'有未儲存的修改':'已與儲存內容同步';save.disabled=busy||!dirty;discard.disabled=busy||!dirty;reset.disabled=busy;for(const control of form.querySelectorAll('input,textarea,select,button'))control.disabled=busy;frame.contentWindow?.postMessage({type:'homepage-preview',config:draft},location.origin);}
  function changed(){dirty=JSON.stringify(draft)!==JSON.stringify(saved);update();}
+ async function run(fn){if(busy)return;busy=true;update();try{await fn();}catch(e){message(e.message);}finally{busy=false;update();}}
  addEventListener('beforeunload',e=>{if(dirty||busy){e.preventDefault();e.returnValue='';}});
  addEventListener('message',e=>{if(e.origin===location.origin&&e.source===frame.contentWindow&&e.data?.type==='homepage-ready')update();});
  function field(parent,label,value,type,onchange,options={}){const wrap=node('div'),id='home-'+crypto.randomUUID(),l=node('label',label);l.htmlFor=id;const input=node(type==='textarea'?'textarea':type==='select'?'select':'input');input.id=id;if(type==='select'){for(const [v,label] of options.choices){const o=node('option',label);o.value=v;input.append(o);}}else if(type!=='textarea')input.type=type;
@@ -40,6 +43,7 @@ export async function init({api,node,message}){
   field(grid,'主照片裁切位置',draft.imagePosition,'select',v=>draft.imagePosition=v,{choices:[['center','置中'],['top','靠上'],['bottom','靠下'],['left','靠左'],['right','靠右']]});
   field(grid,'照片暗色遮罩（0 至 90，越大越暗）',draft.overlay,'number',v=>draft.overlay=v,{min:0,max:90});
   field(grid,'頁面背景顏色',draft.background,'color',v=>draft.background=v);field(grid,'作品系列／工藝介紹區背景',draft.sectionBackground,'color',v=>draft.sectionBackground=v);
+  renderMediaEditor({parent:form,draft,node,field,button,changed,run,message});
   form.append(node('h2','文字、字體大小與顏色'));
   for(const [id,label] of textFields){const details=node('details');details.open=['title','subtitle','description'].includes(id);details.append(node('summary',label));const group=node('div');group.className='home-text-group';details.append(group);form.append(details);
    field(group,'文字內容',draft.texts[id].text,'textarea',v=>draft.texts[id].text=v,{maxLength:2000});const row=node('div');row.className='form-grid';group.append(row);
@@ -47,6 +51,6 @@ export async function init({api,node,message}){
   }
   const bottom=node('button','儲存首頁');bottom.type='submit';form.append(bottom);
  }
- form.onsubmit=async e=>{e.preventDefault();if(busy||!dirty)return;try{validateHomepage(draft);}catch(e){message(e.message);return;}busy=true;update();message('正在儲存首頁…');try{const result=await api('/api/admin/homepage','POST',{config:draft,version});saved=structuredClone(result.config);draft=structuredClone(saved);version=result.version;dirty=false;message('首頁已儲存。重新開啟首頁即可看到更新。');}catch(e){message(e.message+'。你的未儲存修改仍保留在此頁。');}finally{busy=false;update();}};
+ form.onsubmit=async e=>{e.preventDefault();if(busy||!dirty)return;try{validateHomepage(draft);}catch(e){message(e.message);return;}busy=true;update();message('正在儲存首頁…');try{const result=await api('/api/admin/homepage','POST',{config:draft,version});saved=structuredClone(result.config);draft=structuredClone(saved);version=result.version;dirty=false;render();message('首頁已儲存。重新開啟首頁即可看到更新。');}catch(e){message(e.message+'。你的未儲存修改仍保留在此頁。');}finally{busy=false;update();}};
  render();update();message(initial.updatedAt?'上次儲存：'+new Date(initial.updatedAt).toLocaleString('zh-TW'):'尚未自訂首頁，目前使用原始內容。');return true;
 }

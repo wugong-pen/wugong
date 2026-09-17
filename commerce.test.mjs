@@ -1,5 +1,54 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {readFileSync} from 'node:fs';import {createHash} from 'node:crypto';import worker from './worker.js';import {catalogQuote,catalogGuards} from './commerce.js';
 import {defaults} from './homepage-config.js';
+import {youtubeId} from './content-model.js';
+import {validateHomepage} from './homepage-config.js';
+test('homepage supports multiple ordered slideshows and embedded videos with legacy defaults',async()=>{
+ const {sql,call}=setup(),config=defaults();delete config.media;assert.deepEqual(validateHomepage(config).media,[]);
+ config.media=[{type:'slideshow',title:'作品集',autoplay:true,interval:5,photos:[{src:'/28731.jpg',caption:'第一張'},{src:'/964161_0.jpg',caption:'第二張'}]},{type:'youtube',title:'工藝影片',id:'M7lc1UVf-VE'}];
+ assert.equal((await call('/api/admin/homepage','POST',{config,version:0})).status,200);
+ assert.deepEqual((await call('/api/homepage','GET',undefined,'')).data.config.media,config.media);
+ for(const media of [[{...config.media[0],photos:[]}],[{...config.media[0],interval:1}],[{...config.media[0],photos:[{src:'https://other.test/photo.jpg',caption:''}]}],[{...config.media[1],id:'<script>alert(1)</script>'}]])assert.equal((await call('/api/admin/homepage','POST',{config:{...config,media},version:1})).status,400);
+ assert.equal((await call('/api/admin/homepage','POST',{config:{...config,media:[...config.media].reverse()},version:1})).status,200);
+ assert.equal((await call('/api/homepage','GET',undefined,'')).data.config.media[0].type,'youtube');sql.close();
+});
+test('content videos accept only YouTube IDs and verified URL shapes',()=>{
+ for(const url of ['https://youtu.be/M7lc1UVf-VE','https://www.youtube.com/watch?v=M7lc1UVf-VE','https://www.youtube.com/shorts/M7lc1UVf-VE','https://www.youtube-nocookie.com/embed/M7lc1UVf-VE','<iframe width="560" height="315" src="https://www.youtube.com/embed/M7lc1UVf-VE?start=5&amp;rel=0" title="Video" allowfullscreen></iframe>'])assert.equal(youtubeId(url),'M7lc1UVf-VE');
+ for(const url of ['javascript:alert(1)','https://evil.test/watch?v=M7lc1UVf-VE','https://www.youtube.com.evil.test/watch?v=M7lc1UVf-VE','https://secret@www.youtube.com/watch?v=M7lc1UVf-VE','https://youtu.be/bad','<script>alert(1)</script>','<iframe src="https://evil.test/video"></iframe>'])assert.throws(()=>youtubeId(url));
+});
+test('four content categories protect drafts, publish and archive safely, validate links and audit atomically',async()=>{
+ const {sql,call}=setup();
+ assert.deepEqual((await call('/api/content','GET',undefined,'')).data.entries,[]);
+ assert.equal((await call('/api/admin/content','GET',undefined,'member')).status,403);
+ const base={id:'',version:0,kind:'blog',status:'draft',title:'測試 <script>alert(1)</script>',summary:'文字摘要',date:'2026-09-16',cover:'/28731.jpg',source:'https://example.com/report',blocks:[{type:'text',text:'第一段\n第二行'},{type:'image',src:'/28731.jpg',caption:'作品照片'},{type:'youtube',id:'M7lc1UVf-VE',caption:'影片說明'}]};
+ assert.equal((await call('/api/admin/content-entry','POST',base,'member')).status,403);
+ assert.equal((await call('/api/admin/content-entry','POST',base,'admin',{Origin:'https://other.test'})).status,403);
+ let draft=(await call('/api/admin/content-entry','POST',base)).data.entry;assert.equal(draft.version,1);
+ assert.equal((await call('/api/content-entry?id='+draft.id,'GET',undefined,'')).status,404);
+ assert.equal((await call('/api/content','GET',undefined,'')).data.entries.length,0);
+ assert.equal((await call('/api/admin/content-entry?id='+draft.id)).data.entry.blocks[0].text,base.blocks[0].text);
+ let published=(await call('/api/admin/content-entry','POST',{...draft,status:'published'})).data.entry;
+ const detail=(await call('/api/content-entry?id='+draft.id,'GET',undefined,'')).data.entry;
+ assert.equal(detail.title,base.title);assert.equal(detail.version,undefined);assert.equal(detail.status,undefined);
+ assert.deepEqual(detail.blocks[2],base.blocks[2]);
+ assert.equal((await call('/api/admin/content-entry','POST',draft)).status,409);
+ for(const kind of ['awards','events','media'])assert.equal((await call('/api/admin/content-entry','POST',{...base,kind,status:'published'})).status,200);
+ for(const kind of ['blog','awards','events','media']){const entries=(await call('/api/content?kind='+kind,'GET',undefined,'')).data.entries;assert.equal(entries.length,1);assert.equal(entries[0].kind,kind);assert.equal(entries[0].blocks,undefined);}
+ for(const invalid of [{source:'javascript:alert(1)'},{source:'https://user:secret@example.test'},{cover:'https://example.test/a.jpg'},{cover:'/media/'+'0'.repeat(64)},{date:'2026-02-30'},{kind:'unknown'},{status:'unknown'},{blocks:[]},{blocks:[{type:'html',text:'<script>'}]},{blocks:[{type:'text',text:'a'.repeat(5001)}]}])assert.equal((await call('/api/admin/content-entry','POST',{...base,status:'published',...invalid})).status,400,JSON.stringify(invalid));
+ assert.equal((await call('/api/content?page=-1','GET',undefined,'')).status,400);
+ assert.equal((await call('/api/content?page=2','GET',undefined,'')).data.entries.length,0);
+ assert.equal((await call('/api/admin/content?kind=blog&status=published&q='+encodeURIComponent('測試'))).data.entries.length,1);
+ sql.exec("CREATE TRIGGER fail_content_audit BEFORE INSERT ON commerce_audit WHEN NEW.action='content.update' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END;");
+ assert.equal((await call('/api/admin/content-entry','POST',{...published,status:'archived'})).status,500);
+ assert.equal((await call('/api/content-entry?id='+draft.id,'GET',undefined,'')).status,200);
+ sql.exec('DROP TRIGGER fail_content_audit');
+ const archived=(await call('/api/admin/content-entry','POST',{...published,status:'archived'})).data.entry;assert.equal(archived.version,3);
+ assert.equal((await call('/api/content-entry?id='+draft.id,'GET',undefined,'')).status,404);
+ assert.equal((await call('/api/content?kind=blog','GET',undefined,'')).data.entries.length,0);
+ assert.equal((await call('/api/admin/content?kind=blog&status=archived')).data.entries.length,1);
+ assert.equal((await call('/api/admin/content-entry','POST',{...archived,status:'published'})).data.entry.id,draft.id);
+ assert.equal(sql.prepare("SELECT count(*) n FROM commerce_audit WHERE action LIKE 'content.%'").get().n,7);
+ sql.close();
+});
 test('homepage saves persist, require admin and same origin, reject invalid settings and stale updates',async()=>{
  const {sql,call}=setup(),config=defaults();
  assert.equal((await call('/api/homepage','GET',undefined,'')).data.version,0);

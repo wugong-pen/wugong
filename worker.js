@@ -1,4 +1,5 @@
 import {readHomepage,manageHomepage} from './homepage-store.js';
+import {publicContent,manageContent} from './content-store.js';
 import {discountQuote,couponStatements} from './modules.js';
 import {expireReservations,checkStock,reserveStatements} from './inventory.js';
 import {methods,start,confirm,reconcilePayments} from './payments.js';
@@ -103,6 +104,7 @@ async function adminApi(request,env,url) {
     return json({success:true},200,{'Set-Cookie':adminCookie('',0)});
   }
   const m=await adminSession(request,env);
+  if(['/api/admin/content','/api/admin/content-entry'].includes(path)){if(method!=='GET')await rate(env,`admin-content:${m.id}`,120);return json({success:true,...await manageContent(request,env,url,m,body)});}
   if(path==='/api/admin/homepage'){if(method!=='GET')await rate(env,`admin-homepage:${m.id}`,60);return json({success:true,...await manageHomepage(request,env,m,body)});}
   if(path.startsWith('/api/admin/')&&!['/api/admin/session','/api/admin/orders','/api/admin/order/status'].includes(path)&&!path.startsWith('/api/admin/orders/')) {
     if(method!=='GET')await rate(env,`admin-commerce:${m.id}`,120);
@@ -184,6 +186,7 @@ async function consumeEmailToken(request,env,purpose) {
 }
 async function api(request,env,url,ctx) {
   const path=url.pathname,method=request.method;
+  if(['/api/content','/api/content-entry'].includes(path)&&method==='GET')return json({success:true,...await publicContent(env,url)});
   if(path==='/api/homepage'&&method==='GET')return json({success:true,...await readHomepage(env)});
   if(['/api/catalog','/api/categories'].includes(path)&&method==='GET')return json({success:true,...await publicCommerce(request,env,url)});
   if(path==='/api/payments/ecpay/notify')return notify(request,env);
@@ -327,6 +330,6 @@ export default {
       if(/^\/(member|checkout)(\.html)?\/?$/.test(url.pathname))result.headers.set('Cache-Control','no-store');
       if(/^\/member(\.html)?\/?$/.test(url.pathname))result.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
       return result;
-    }catch(error){if(error.message?.includes('CHECK constraint failed: ok'))error=new HttpError(409,'資料已變更，請重新整理後再操作');if(!(error instanceof HttpError)) console.error("Member request failed", error.name, error.message); return json({success:false,error:error instanceof HttpError||[400,409,503].includes(error.status)?error.message:'服務暫時無法使用，請稍後再試'},error.status||500,env.APP_ENV==='staging'?{'X-Robots-Tag':'noindex, nofollow, noarchive'}:{});}
+    }catch(error){if(error.message?.includes('CHECK constraint failed: ok'))error=new HttpError(409,'資料已變更，請重新整理後再操作');if(!(error instanceof HttpError)) console.error("Member request failed", error.name, error.message); return json({success:false,error:error instanceof HttpError||[400,404,405,409,503].includes(error.status)?error.message:'服務暫時無法使用，請稍後再試'},error.status||500,env.APP_ENV==='staging'?{'X-Robots-Tag':'noindex, nofollow, noarchive'}:{});}
   }
 };

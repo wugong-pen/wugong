@@ -710,7 +710,7 @@ footer strong{
 </style>
 <link rel="stylesheet" href="/responsive.css">
 <script src="/navigation.js" defer></script>
-<script type="module" src="/homepage.js"></script></head>
+<link rel="stylesheet" href="/homepage-media.css"><script type="module" src="/homepage.js"></script></head>
 
 <body class="home-page">
 
@@ -728,7 +728,7 @@ footer strong{
     <a href="#collections">作品系列</a>
     <a href="#shop">線上商店</a>
     <a href="#craft">工藝</a>
-    <a href="#about">品牌故事</a>
+    <a href="#about">品牌故事</a><a href="/content.html">品牌紀事</a>
 
     <a class="cart-link" href="/cart.html" onclick="event.preventDefault();openCart()">
       購物車
@@ -877,6 +877,7 @@ footer strong{
 </section>
 
 
+<section id="journal"><div class="section-title"><small>WUGONG JOURNAL</small><h2>品牌紀事</h2></div><div style="display:flex;flex-wrap:wrap;justify-content:center;gap:20px"><a class="btn" href="/content.html?kind=blog">網誌圖文</a><a class="btn" href="/content.html?kind=awards">獲獎紀錄</a><a class="btn" href="/content.html?kind=events">活動花絮</a><a class="btn" href="/content.html?kind=media">媒體採訪</a></div></section>
 <footer>
 
   <p><strong>WUGONG</strong></p>
@@ -1126,7 +1127,7 @@ function closeCart() {
 function checkoutNotice() { window.location.href = '/checkout.html'; }
 
 
-renderCart();
+safeRenderCart();
 
 </script>
 

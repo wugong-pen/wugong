@@ -1,15 +1,10 @@
+import {youtubeId} from './content-model.js';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 const num=(v,min,max)=>{if(!Number.isSafeInteger(v)||v<min||v>max)fail(400,'數字範圍不正確');return v;};
 const text=(v,max=200)=>{if(typeof v!=='string'||v.length>max)fail(400,'文字格式不正確');return v.trim();};
 const check=env=>env.DB.prepare('INSERT INTO catalog_checks(ok) SELECT CASE WHEN changes()=1 THEN 1 ELSE 0 END');
 const audit=(env,m,action,target,before,after)=>env.DB.prepare('INSERT INTO commerce_audit VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),m.id,action,target,JSON.stringify(before),JSON.stringify(after),'模組管理',new Date().toISOString());
-export function youtube(value){
- if(!value)return '';let s=text(value,2000);if(s.includes('<')){const match=s.match(/\bsrc=["']([^"']+)["']/i);if(!match)fail(400,'請貼上 YouTube 分享網址或嵌入碼');s=match[1];}
- let u;try{u=new URL(s);}catch{fail(400,'YouTube 網址不正確');}
- if(u.protocol!=='https:'||!['youtube.com','www.youtube.com','youtu.be','www.youtube-nocookie.com'].includes(u.hostname))fail(400,'僅接受 YouTube 影片');
- const id=u.hostname==='youtu.be'?u.pathname.slice(1):u.pathname.startsWith('/embed/')||u.pathname.startsWith('/shorts/')?u.pathname.split('/')[2]:u.searchParams.get('v');
- if(!/^[\w-]{11}$/.test(id||''))fail(400,'YouTube 影片代碼不正確');return id;
-}
+export function youtube(value){return value?youtubeId(value):'';}
 export async function discountQuote(env,q,code,member){
  q.subtotal=q.total;q.discount=0;q.coupon=null;if(!code)return q;
  code=text(code,40).toUpperCase();const c=await env.DB.prepare('SELECT * FROM promotions WHERE code=?').bind(code).first(),now=new Date().toISOString();
