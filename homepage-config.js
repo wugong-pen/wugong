@@ -17,7 +17,7 @@ export const textFields = [
  ['craft','工藝介紹內容','#craft > p','真正的工藝不只是外觀，而是對每一道工序的堅持。\n從設計草圖開始，經過加工、研磨、組裝與細節修整，WUGONG 希望讓每一件作品，都能在時間中持續留下質感。',18,'#ddd2bf','sans']
 ];
 export const fonts={sans:'"Noto Sans TC",Arial,sans-serif',serif:'Georgia,"Noto Serif TC",serif',kai:'"標楷體",DFKai-SB,KaiTi,serif'};
-export function defaults(){return {image:'/28731.jpg',imagePosition:'center',overlay:52,background:'#111111',backgroundImage:'',sectionBackground:'#181818',media:[],texts:Object.fromEntries(textFields.map(([id,,,text,size,color,font])=>[id,{text,size,color,font}]))};}
+export function defaults(){return {logo:'/964161_0.jpg',image:'/28731.jpg',imagePosition:'center',overlay:52,background:'#111111',backgroundImage:'',sectionBackground:'#181818',media:[],texts:Object.fromEntries(textFields.map(([id,,,text,size,color,font])=>[id,{text,size,color,font}]))};}
 const bad=message=>{throw Object.assign(new Error(message),{status:400});};
 export function validateHomepage(value){
  if(!value||typeof value!=='object'||Array.isArray(value))bad('首頁設定格式不正確');
@@ -34,10 +34,11 @@ export function validateHomepage(value){
   photos+=block.photos.length;if(photos>36)bad('首頁幻燈片照片合計最多 36 張');
   return {type:'slideshow',title:block.title,autoplay:block.autoplay,interval:block.interval,photos:block.photos.map(p=>{if(!p||!p.src||typeof p.caption!=='string'||p.caption.length>200)bad('請填寫有效照片及 200 字以內的說明');return {src:image(p.src),caption:p.caption};})};
  });
- return {image:image(value.image),imagePosition:value.imagePosition,overlay:value.overlay,background:color(value.background),backgroundImage:image(value.backgroundImage),sectionBackground:color(value.sectionBackground),media,texts};
+ return {logo:image(value.logo===undefined?'/964161_0.jpg':value.logo),image:image(value.image),imagePosition:value.imagePosition,overlay:value.overlay,background:color(value.background),backgroundImage:image(value.backgroundImage),sectionBackground:color(value.sectionBackground),media,texts};
 }
 export function applyHomepage(config,root=document){
  const c=validateHomepage(config),body=root.querySelector('body'),hero=root.querySelector('#home');
+ const logo=root.querySelector('header img');if(logo){logo.hidden=!c.logo;if(c.logo)logo.src=c.logo;else logo.removeAttribute('src');}
  body.style.backgroundColor=c.background;body.style.backgroundImage=c.backgroundImage?`url("${c.backgroundImage}")`:'none';body.style.backgroundSize='cover';
  for(const el of root.querySelectorAll('#about,#shop'))el.style.background='transparent';
  for(const el of root.querySelectorAll('#collections,#craft'))el.style.background=c.sectionBackground;

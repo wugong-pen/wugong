@@ -8,7 +8,7 @@ export async function manageHomepage(request,env,m,body){
  // Additive initialization lets the first authorized save work on an existing deployment.
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS homepage_settings (id TEXT PRIMARY KEY CHECK(id='home'), value TEXT NOT NULL, version INTEGER NOT NULL CHECK(version>0), updated_at TEXT NOT NULL)").run();
  const old=await readHomepage(env);if(old.version!==data.version)throw Object.assign(new Error('首頁已被其他管理員更新，請重新載入後再編輯'),{status:409});
- for(const path of [config.image,config.backgroundImage,...config.media.flatMap(b=>b.type==='slideshow'?b.photos.map(p=>p.src):[])])if(path.startsWith('/media/')&&!await env.DB.prepare('SELECT id FROM product_images WHERE id=?').bind(path.slice(7)).first())throw Object.assign(new Error('照片不存在，請重新上傳'),{status:400});
+ for(const path of [config.logo,config.image,config.backgroundImage,...config.media.flatMap(b=>b.type==='slideshow'?b.photos.map(p=>p.src):[])])if(path.startsWith('/media/')&&!await env.DB.prepare('SELECT id FROM product_images WHERE id=?').bind(path.slice(7)).first())throw Object.assign(new Error('照片不存在，請重新上傳'),{status:400});
  const stamp=new Date().toISOString();
  await env.DB.batch([
   env.DB.prepare("INSERT INTO homepage_settings(id,value,version,updated_at) SELECT 'home',?,1,? WHERE ?=0 ON CONFLICT(id) DO NOTHING").bind(JSON.stringify(config),stamp,data.version),
