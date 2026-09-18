@@ -10,6 +10,18 @@ const publicProduct=p=>({sku:p.sku,family:p.family,name:p.name,variant:p.variant
 const rows=async(env,query,...params)=>(await env.DB.prepare(query).bind(...params).all()).results;
 const assertion=env=>env.DB.prepare('INSERT INTO catalog_checks(ok) SELECT CASE WHEN changes()=1 THEN 1 ELSE 0 END');
 function audit(env,m,action,target,before,after,reason){return env.DB.prepare('INSERT INTO commerce_audit VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),m.id,action,target,JSON.stringify(before),JSON.stringify(after),reason,stamp());}
+
+async function serviceSchema(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_service (member_id TEXT PRIMARY KEY REFERENCES members(id),member_number TEXT UNIQUE,version INTEGER NOT NULL,updated_at TEXT NOT NULL)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_warranties (id TEXT PRIMARY KEY,member_id TEXT NOT NULL REFERENCES members(id),product TEXT NOT NULL,card TEXT NOT NULL UNIQUE,start_date TEXT NOT NULL,end_date TEXT NOT NULL,order_number TEXT NOT NULL DEFAULT '',note TEXT NOT NULL DEFAULT '')").run();
+ await env.DB.prepare('CREATE INDEX IF NOT EXISTS member_warranties_owner ON member_warranties(member_id)').run();
+}
+async function memberService(env,id){
+ try{const service=await env.DB.prepare('SELECT member_number,version FROM member_service WHERE member_id=?').bind(id).first();const warranties=await rows(env,'SELECT id,product,card,start_date,end_date,order_number,note FROM member_warranties WHERE member_id=? ORDER BY start_date DESC,id LIMIT 201',id);return {member_number:service?.member_number||'',version:service?.version||0,warranties};}
+ catch(e){if(!/no such table: member_(service|warranties)/.test(e.message))throw e;return {member_number:'',version:0,warranties:[]};}
+}
+function warrantyDate(v){v=str(v,10);if(!/^\d{4}-\d{2}-\d{2}$/.test(v)||!Number.isFinite(Date.parse(v))||new Date(v).toISOString().slice(0,10)!==v)fail(400,'請輸入有效保固日期（年-月-日）');return v;}
+
 export async function catalogQuote(env,items){
  if(!Array.isArray(items)||items.length<1||items.length>50)fail(400,'請確認購物車商品');
  const counts=new Map(),result=[];
@@ -82,8 +94,28 @@ export async function manageCommerce(request,env,url,m,body){
  }
  if(path==='/api/admin/member'&&method==='GET'){
   const id=str(url.searchParams.get('id')||'',100),member=await env.DB.prepare('SELECT id,name,email,phone,address,birthday,country,active,created_at FROM members WHERE id=?').bind(id).first();if(!member)fail(404,'找不到會員');
-  const orders=await rows(env,'SELECT o.order_number,o.total,o.status,o.created_at FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE mo.member_id=? ORDER BY o.created_at DESC LIMIT 21 OFFSET ?',id,(page(url)-1)*20);return{member,orders:orders.slice(0,20),hasMore:orders.length>20};
+  const orders=await rows(env,'SELECT o.order_number,o.total,o.status,o.created_at,o.items FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE mo.member_id=? ORDER BY o.created_at DESC LIMIT 21 OFFSET ?',id,(page(url)-1)*20);return{member,orders:orders.slice(0,20),hasMore:orders.length>20,service:await memberService(env,id)};
  }
+
+ if(path==='/api/admin/member-service'&&method==='POST'){
+  const d=await body(request),id=str(d.id,100),number=str(d.member_number,60),version=integer(d.version,0,1000000);
+  if(!await env.DB.prepare('SELECT id FROM members WHERE id=?').bind(id).first())fail(404,'找不到會員');
+  if(!Array.isArray(d.warranties)||d.warranties.length>100)fail(400,'每位會員最多登錄 100 筆保固');
+  const warranties=d.warranties.map(w=>{const product=str(w.product,200),card=str(w.card,100),start_date=warrantyDate(w.start_date),end_date=warrantyDate(w.end_date),order_number=str(w.order_number||'',60),note=str(w.note||'',1000),wid=w.id?str(w.id,100):crypto.randomUUID();if(!product||!card)fail(400,'請填寫商品名稱與保固卡編號');if(end_date<start_date)fail(400,'保固到期日不能早於開始日');return {id:wid,product,card,start_date,end_date,order_number,note};});
+  if(new Set(warranties.map(w=>w.card)).size!==warranties.length||new Set(warranties.map(w=>w.id)).size!==warranties.length)fail(400,'保固卡編號不能重複');
+  for(const w of warranties)if(w.order_number&&!await env.DB.prepare('SELECT order_number FROM member_orders WHERE member_id=? AND order_number=?').bind(id,w.order_number).first())fail(400,'關聯訂單必須屬於這位會員；舊購買資料請將訂單欄留空並填入備註');
+  await serviceSchema(env);const old=await memberService(env,id);if(old.version!==version)fail(409,'會員保固資料已更新，請重新開啟後再修改');
+  if(old.warranties.some(w=>!warranties.some(n=>n.id===w.id)))fail(400,'既有保固紀錄須保留，可編輯內容及備註');
+  const updated={member_number:number,version:version+1,warranties};
+  try{await env.DB.batch([
+   ...(version===0?[env.DB.prepare('INSERT INTO member_service(member_id,member_number,version,updated_at) VALUES (?,?,1,?) ON CONFLICT(member_id) DO NOTHING').bind(id,number||null,stamp())]:[env.DB.prepare('UPDATE member_service SET member_number=?,version=version+1,updated_at=? WHERE member_id=? AND version=?').bind(number||null,stamp(),id,version)]),assertion(env),
+   env.DB.prepare('DELETE FROM member_warranties WHERE member_id=?').bind(id),
+   ...warranties.map(w=>env.DB.prepare('INSERT INTO member_warranties(id,member_id,product,card,start_date,end_date,order_number,note) VALUES (?,?,?,?,?,?,?,?)').bind(w.id,id,w.product,w.card,w.start_date,w.end_date,w.order_number,w.note)),
+   audit(env,m,'member.service',id,old,updated,'會員編號與保固資料')
+  ]);}catch(e){if(e.message?.includes('UNIQUE constraint failed'))fail(409,'會員編號或保固卡編號已被使用，請確認後再儲存');throw e;}
+  return {service:updated};
+ }
+
  if(path==='/api/admin/member'&&method==='PATCH'){
   const d=await body(request),id=str(d.id,100),next=integer(d.active,0,1),expected=integer(d.expected,0,1),reason=str(d.reason,500);if(!reason||id===m.id||await env.DB.prepare('SELECT member_id FROM admin_members WHERE member_id=? AND active=1').bind(id).first())fail(400,'不能從會員管理停用自己或管理員，請填寫一般會員異動原因');
   await env.DB.batch([env.DB.prepare('UPDATE members SET active=?,updated_at=? WHERE id=? AND active=?').bind(next,stamp(),id,expected),assertion(env),env.DB.prepare('DELETE FROM member_sessions WHERE member_id=?').bind(id),env.DB.prepare('DELETE FROM admin_sessions WHERE member_id=?').bind(id),audit(env,m,'member.status',id,{active:expected},{active:next},reason)]);return{};

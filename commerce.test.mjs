@@ -154,3 +154,26 @@ test('additive coupon migration preserves existing uses and rerunning never resu
  const migration=readFileSync(new URL('schema-categories-gifts.sql',import.meta.url),'utf8');sql.exec(migration);assert.equal(sql.prepare("SELECT version FROM promotions WHERE code='OLD'").get().version,3);assert.equal(sql.prepare('SELECT count(*) n FROM promotion_claims').get().n,1);
  sql.exec("DELETE FROM promotion_claims; UPDATE promotions SET amount=200 WHERE code='OLD'");sql.exec(migration);assert.equal(sql.prepare('SELECT count(*) n FROM promotion_claims').get().n,0);assert.equal(sql.prepare("SELECT amount FROM promotions WHERE code='OLD'").get().amount,200);sql.close();
 });
+
+test('member service preserves order ownership, unique numbers, dates, versions and atomic audit',async()=>{
+ const {sql,call}=setup();
+ sql.prepare("INSERT INTO orders(order_number,items,total,status,created_at) VALUES (?,?,?,?,?)").run('OWNED','[{"product":"富士山","quantity":2,"nib":"WUGONG"}]',240000,'paid','2026-09-18');
+ sql.prepare('INSERT INTO member_orders VALUES (?,?,?,?)').run('OWNED','customer','TW','owned-key');
+ sql.prepare("INSERT INTO orders(order_number,items,total,status,created_at) VALUES (?,?,?,?,?)").run('OTHER','[]',120000,'paid','2026-09-18');
+ sql.prepare('INSERT INTO member_orders VALUES (?,?,?,?)').run('OTHER','owner','TW','other-key');
+ const info=await call('/api/admin/member?id=customer');assert.equal(info.data.member.birthday,'1990-01-01');assert.equal(info.data.orders.length,1);assert.match(info.data.orders[0].items,/富士山/);assert.equal(info.data.service.version,0);
+ const data={id:'customer',member_number:'WG-001',version:0,warranties:[{product:'富士山',card:'CARD-001',start_date:'2026-09-18',end_date:'2027-09-18',order_number:'OWNED',note:'第一支'},{product:'富士山',card:'CARD-002',start_date:'2026-09-18',end_date:'2027-09-18',order_number:'OWNED',note:'第二支'}]};
+ for(const role of ['','member'])assert.equal((await call('/api/admin/member-service','POST',data,role)).status,403);
+ assert.equal((await call('/api/admin/member-service','POST',data,'admin',{Origin:'https://evil.test'})).status,403);
+ for(const delta of [{end_date:'2025-01-01'},{start_date:'2026-02-30'},{order_number:'OTHER'}])assert.equal((await call('/api/admin/member-service','POST',{...data,warranties:[{...data.warranties[0],...delta}]})).status,400);
+ const saved=await call('/api/admin/member-service','POST',data);assert.equal(saved.status,200,JSON.stringify(saved.data));assert.equal(saved.data.service.warranties.length,2);
+ assert.equal((await call('/api/admin/member-service','POST',data)).status,409);
+ const current={id:'customer',...saved.data.service};assert.equal((await call('/api/admin/member-service','POST',{...current,warranties:[]})).status,400);
+ assert.equal((await call('/api/admin/member-service','POST',{id:'owner',member_number:'WG-001',version:0,warranties:[]})).status,409);
+ assert.equal((await call('/api/admin/member-service','POST',{id:'owner',member_number:'WG-002',version:0,warranties:[{...data.warranties[0],order_number:''}]})).status,409);
+ assert.equal((await call('/api/admin/member?id=owner')).data.service.version,0);
+ sql.exec("CREATE TRIGGER deny_service_audit BEFORE INSERT ON commerce_audit BEGIN SELECT RAISE(ABORT,'audit failed'); END;");
+ assert.equal((await call('/api/admin/member-service','POST',{...current,member_number:'CHANGED'})).status,500);
+ const after=await call('/api/admin/member?id=customer');assert.equal(after.data.service.member_number,'WG-001');assert.equal(after.data.service.version,1);assert.equal(after.data.service.warranties.length,2);
+ sql.close();
+});
