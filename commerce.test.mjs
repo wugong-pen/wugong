@@ -177,3 +177,21 @@ test('member service preserves order ownership, unique numbers, dates, versions 
  const after=await call('/api/admin/member?id=customer');assert.equal(after.data.service.member_number,'WG-001');assert.equal(after.data.service.version,1);assert.equal(after.data.service.warranties.length,2);
  sql.close();
 });
+test('manual members support editable profiles and purchases without creating login accounts or affecting orders',async()=>{
+ const {sql,call}=setup();const data={id:'',version:0,name:'現場客人',email:'contact@example.test',birthday:'1985-04-03',country:'TW',phone:'0912345678',address:'台北',purchases:[{product:'富士山／F尖',date:'2025-06-01',quantity:1,amount:25000,source:'現場展售',note:'舊客戶補登'}]};
+ for(const role of ['','member'])assert.equal((await call('/api/admin/member-profile','POST',data,role)).status,403);
+ assert.equal((await call('/api/admin/member-profile','POST',data,'admin',{Origin:'https://evil.test'})).status,403);
+ for(const change of [{birthday:'2026-02-30'},{birthday:'2999-01-01'},{country:'XX'},{email:'bad'},{purchases:[{...data.purchases[0],quantity:0}]}])assert.equal((await call('/api/admin/member-profile','POST',{...data,...change})).status,400);
+ const created=await call('/api/admin/member-profile','POST',data);assert.equal(created.status,200,JSON.stringify(created.data));const id=created.data.id;
+ const row=sql.prepare('SELECT * FROM members WHERE id=?').get(id);assert.equal(row.active,0);assert.equal(row.password_hash,'offline-contact');assert.notEqual(row.email,data.email);assert.equal(sql.prepare('SELECT count(*) n FROM orders').get().n,0);
+ let detail=(await call('/api/admin/member?id='+id)).data;assert.equal(detail.member.email,data.email);assert.equal(detail.offline,true);assert.equal(detail.purchases[0].product,data.purchases[0].product);
+ assert.equal((await call('/api/admin/members?q=contact')).data.members[0].id,id);
+ const update={...data,id,version:detail.profile_version,updated_at:detail.member.updated_at,purchases:detail.purchases,name:'更正姓名'};assert.equal((await call('/api/admin/member-profile','POST',update)).status,200);assert.equal((await call('/api/admin/member-profile','POST',update)).status,409);
+ assert.equal((await call('/api/admin/member-profile','POST',{...update,version:2,updated_at:(await call('/api/admin/member?id='+id)).data.member.updated_at,purchases:[]})).status,400);
+ const warranty={id,version:0,member_number:'OFFLINE-001',warranties:[{product:'富士山',card:'CARD-001',start_date:'2025-06-01',end_date:'2027-06-01',order_number:'',note:'現場購買'}]};assert.equal((await call('/api/admin/member-service','POST',warranty)).status,200);
+ detail=(await call('/api/admin/member?id='+id)).data;assert.equal(detail.member.name,'更正姓名');assert.equal(detail.service.member_number,'OFFLINE-001');assert.equal(detail.service.warranties[0].card,'CARD-001');
+ assert.equal((await call('/api/admin/member-profile','POST',{...data,id:'customer',updated_at:'2026-09-14',email:'different@example.test'})).status,400);
+ sql.exec("CREATE TRIGGER fail_profile_audit BEFORE INSERT ON commerce_audit WHEN NEW.action IN ('member.create','member.profile') BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");
+ assert.equal((await call('/api/admin/member-profile','POST',{...update,version:2,updated_at:detail.member.updated_at,name:'不得保存'})).status,500);assert.equal(sql.prepare('SELECT name FROM members WHERE id=?').get(id).name,'更正姓名');
+ const before=sql.prepare('SELECT count(*) n FROM members').get().n;assert.equal((await call('/api/admin/member-profile','POST',data)).status,500);assert.equal(sql.prepare('SELECT count(*) n FROM members').get().n,before);sql.close();
+});

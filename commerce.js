@@ -1,3 +1,4 @@
+import {COUNTRY_CODES} from './countries.js';
 import {manageModules} from './modules.js';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 const stamp=()=>new Date().toISOString();
@@ -67,6 +68,7 @@ async function upload(request,env){
 export async function manageCommerce(request,env,url,m,body){
  const extension=await manageModules(request,env,url,m,body);if(extension!==null)return extension;
  const path=url.pathname,method=request.method;
+ if(path.startsWith('/api/admin/member'))await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_contacts(member_id TEXT PRIMARY KEY REFERENCES members(id),offline INTEGER NOT NULL DEFAULT 0,email TEXT NOT NULL DEFAULT '',purchases TEXT NOT NULL DEFAULT '[]',version INTEGER NOT NULL DEFAULT 1)").run();
  if(path==='/api/admin/images'&&method==='POST')return upload(request,env);
  if(path==='/api/admin/products'&&method==='GET'){
   const r=await rows(env,"SELECT p.*,(SELECT category_id FROM product_categories WHERE sku=p.sku) AS category_id,i.available,i.sold FROM products p JOIN product_families f ON f.family=p.family JOIN inventory i ON i.sku=f.stock_sku WHERE (p.name LIKE ? ESCAPE '\\' OR p.sku LIKE ? ESCAPE '\\') ORDER BY p.updated_at DESC,p.sku LIMIT 21 OFFSET ?",pattern(url),pattern(url),(page(url)-1)*20);return{products:r.slice(0,20).map(p=>({...publicProduct(p),active:p.active,sold:p.sold})),hasMore:r.length>20};
@@ -90,11 +92,25 @@ export async function manageCommerce(request,env,url,m,body){
   await env.DB.batch([env.DB.prepare('UPDATE inventory SET available=available+? WHERE sku=? AND available=? AND available+?>=0').bind(delta,sku,expected,delta),assertion(env),audit(env,m,'stock.adjust',sku,{available:expected},{available:expected+delta},reason)]);return{available:expected+delta};
  }
  if(path==='/api/admin/members'&&method==='GET'){
-  const r=await rows(env,"SELECT m.id,m.name,m.email,m.phone,m.country,m.active,m.created_at,(SELECT count(*) FROM member_orders mo WHERE mo.member_id=m.id) AS order_count,EXISTS(SELECT 1 FROM admin_members a WHERE a.member_id=m.id AND a.active=1) AS is_admin FROM members m WHERE (m.email LIKE ? ESCAPE '\\' OR m.name LIKE ? ESCAPE '\\') ORDER BY m.created_at DESC,m.id LIMIT 21 OFFSET ?",pattern(url),pattern(url),(page(url)-1)*20);return{members:r.slice(0,20),hasMore:r.length>20};
+  const r=await rows(env,"SELECT m.id,m.name,CASE WHEN c.offline=1 THEN c.email ELSE m.email END AS email,COALESCE(c.offline,0) AS offline,json_array_length(COALESCE(c.purchases,'[]')) AS manual_count,m.phone,m.country,m.active,m.created_at,(SELECT count(*) FROM member_orders mo WHERE mo.member_id=m.id) AS order_count,EXISTS(SELECT 1 FROM admin_members a WHERE a.member_id=m.id AND a.active=1) AS is_admin FROM members m LEFT JOIN member_contacts c ON c.member_id=m.id WHERE (CASE WHEN c.offline=1 THEN c.email ELSE m.email END LIKE ? ESCAPE '\\' OR m.name LIKE ? ESCAPE '\\') ORDER BY m.created_at DESC,m.id LIMIT 21 OFFSET ?",pattern(url),pattern(url),(page(url)-1)*20);return{members:r.slice(0,20),hasMore:r.length>20};
  }
  if(path==='/api/admin/member'&&method==='GET'){
-  const id=str(url.searchParams.get('id')||'',100),member=await env.DB.prepare('SELECT id,name,email,phone,address,birthday,country,active,created_at FROM members WHERE id=?').bind(id).first();if(!member)fail(404,'找不到會員');
-  const orders=await rows(env,'SELECT o.order_number,o.total,o.status,o.created_at,o.items FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE mo.member_id=? ORDER BY o.created_at DESC LIMIT 21 OFFSET ?',id,(page(url)-1)*20);return{member,orders:orders.slice(0,20),hasMore:orders.length>20,service:await memberService(env,id)};
+  const id=str(url.searchParams.get('id')||'',100),member=await env.DB.prepare('SELECT id,name,email,phone,address,birthday,country,active,created_at,updated_at FROM members WHERE id=?').bind(id).first();if(!member)fail(404,'找不到會員');
+  const orders=await rows(env,'SELECT o.order_number,o.total,o.status,o.created_at,o.items FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE mo.member_id=? ORDER BY o.created_at DESC LIMIT 21 OFFSET ?',id,(page(url)-1)*20);const contact=await env.DB.prepare('SELECT * FROM member_contacts WHERE member_id=?').bind(id).first();if(contact?.offline)member.email=contact.email;return{profile_version:contact?.version||0,offline:!!contact?.offline,purchases:JSON.parse(contact?.purchases||'[]'),member,orders:orders.slice(0,20),hasMore:orders.length>20,service:await memberService(env,id)};
+ }
+
+ if(path==='/api/admin/member-profile'&&method==='POST'){
+  const d=await body(request),creating=!d.id,id=creating?crypto.randomUUID():str(d.id,100),old=creating?null:await env.DB.prepare('SELECT * FROM members WHERE id=?').bind(id).first();if(!creating&&!old)fail(404,'找不到會員');if(old&&d.updated_at!==old.updated_at)fail(409,'基本資料已更新，請重新開啟會員');
+  const contact=creating?null:await env.DB.prepare('SELECT * FROM member_contacts WHERE member_id=?').bind(id).first(),version=integer(d.version,0,1000000);if(version!==(contact?.version||0))fail(409,'資料已更新，請重新開啟會員');
+  const name=str(d.name,100),birthday=str(d.birthday||'',10),country=str(d.country||'',2),phone=str(d.phone||'',40),address=str(d.address||'',500),email=str(d.email||'',254).toLowerCase();
+  if(!name)fail(400,'請填寫姓名');if(birthday&&(warrantyDate(birthday)<'1900-01-01'||birthday>stamp().slice(0,10)))fail(400,'請確認生日，不能是未來日期');if(country&&!COUNTRY_CODES.includes(country))fail(400,'請選擇有效國家');if(email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))fail(400,'請確認電子郵件');if(old&&!contact?.offline&&email!==old.email.toLowerCase())fail(400,'網站登入信箱不可在此更改');
+  if(!Array.isArray(d.purchases)||d.purchases.length>100)fail(400,'最多可登錄 100 筆購買紀錄');
+  const purchases=d.purchases.map(p=>{const product=str(p.product,200),date=warrantyDate(p.date),quantity=integer(p.quantity,1,9999),amount=p.amount===''?'':integer(p.amount,0,100000000),source=str(p.source||'',200),note=str(p.note||'',1000),pid=p.id?str(p.id,100):crypto.randomUUID();if(!product)fail(400,'請填寫購買商品');return{id:pid,product,date,quantity,amount,source,note};});
+  if(new Set(purchases.map(p=>p.id)).size!==purchases.length)fail(400,'購買紀錄不可重複');if(JSON.parse(contact?.purchases||'[]').some(p=>!purchases.some(n=>n.id===p.id)))fail(400,'請保留既有購買紀錄，可修改內容或備註');
+  const updated=stamp(),offline=creating||!!contact?.offline;
+  const statements=creating?[env.DB.prepare('INSERT INTO members(id,email,password_hash,name,birthday,country,phone,address,active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,0,?,?)').bind(id,id+'@offline.invalid','offline-contact',name,birthday,country,phone,address,updated,updated)]:[env.DB.prepare('UPDATE members SET name=?,birthday=?,country=?,phone=?,address=?,updated_at=? WHERE id=? AND updated_at=?').bind(name,birthday,country,phone,address,updated,id,old.updated_at),assertion(env)];
+  statements.push(version===0?env.DB.prepare('INSERT INTO member_contacts(member_id,offline,email,purchases,version) VALUES (?,?,?,?,1) ON CONFLICT(member_id) DO NOTHING').bind(id,offline?1:0,email,JSON.stringify(purchases)):env.DB.prepare('UPDATE member_contacts SET email=?,purchases=?,version=version+1 WHERE member_id=? AND version=?').bind(email,JSON.stringify(purchases),id,version),assertion(env),audit(env,m,creating?'member.create':'member.profile',id,{version},{version:version+1,name,purchase_count:purchases.length},'會員基本資料與手動購買紀錄'));
+  await env.DB.batch(statements);return{id};
  }
 
  if(path==='/api/admin/member-service'&&method==='POST'){
