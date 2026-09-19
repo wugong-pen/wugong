@@ -1,3 +1,4 @@
+import {manageFirstGift} from './first-purchase.js';
 import {youtubeId} from './content-model.js';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 const num=(v,min,max)=>{if(!Number.isSafeInteger(v)||v<min||v>max)fail(400,'數字範圍不正確');return v;};
@@ -22,6 +23,7 @@ export function couponStatements(env,q,member,order){if(!q.coupon)return [];cons
  env.DB.prepare('INSERT INTO catalog_checks(ok) SELECT CASE WHEN EXISTS(SELECT 1 FROM promotions WHERE code=? AND version=? AND active=1 AND starts<=? AND ends>?) AND (SELECT count(*) FROM promotion_claims WHERE code=?)<? AND NOT EXISTS(SELECT 1 FROM promotion_claims WHERE code=? AND member_id=?) THEN 1 ELSE 0 END').bind(c.code,c.version,now,now,c.code,c.quota,c.code,member),
  env.DB.prepare('INSERT INTO promotion_claims VALUES (?,?,?,?)').bind(c.code,member,order,q.discount),env.DB.prepare('INSERT INTO order_discounts VALUES (?,?,?,?)').bind(order,c.code,q.subtotal,q.discount),...(c.kind==='gift'?[env.DB.prepare('INSERT INTO order_gifts VALUES (?,?,?)').bind(order,c.gift_text,c.gift_kind)]:[])];}
 export async function manageModules(request,env,url,m,body){
+ const first=await manageFirstGift(request,env,url,m,body);if(first!==null)return first;
  const path=url.pathname,method=request.method;
  if(path==='/api/admin/categories'){
   if(method==='GET')return{categories:(await env.DB.prepare('SELECT * FROM categories ORDER BY parent,name').all()).results};

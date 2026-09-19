@@ -1,3 +1,4 @@
+import {firstGiftForOrder} from './first-purchase.js';
 import {COUNTRY_CODES} from './countries.js';
 import {manageModules} from './modules.js';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
@@ -138,7 +139,7 @@ export async function manageCommerce(request,env,url,m,body){
  }
  if(path==='/api/admin/order-management'&&method==='GET'){
   const number=str(url.searchParams.get('order')||'',60);if(!await env.DB.prepare('SELECT order_number FROM orders WHERE order_number=?').bind(number).first())fail(404,'找不到訂單');
-  const management=await env.DB.prepare('SELECT * FROM order_management WHERE order_number=?').bind(number).first();const remittance=await env.DB.prepare("SELECT remittance_last5,remittance_date,reported_at,due_at FROM payment_attempts WHERE order_number=? AND provider='bank'").bind(number).first();return{management:management||{admin_note:'',carrier:'',tracking:'',version:0},remittance,gift:await env.DB.prepare('SELECT * FROM order_gifts WHERE order_number=?').bind(number).first(),discount:await env.DB.prepare('SELECT * FROM order_discounts WHERE order_number=?').bind(number).first()};
+  const management=await env.DB.prepare('SELECT * FROM order_management WHERE order_number=?').bind(number).first();const remittance=await env.DB.prepare("SELECT remittance_last5,remittance_date,reported_at,due_at FROM payment_attempts WHERE order_number=? AND provider='bank'").bind(number).first();return{management:management||{admin_note:'',carrier:'',tracking:'',version:0},remittance,gift:await (async()=>{const regular=await env.DB.prepare('SELECT * FROM order_gifts WHERE order_number=?').bind(number).first(),first=await firstGiftForOrder(env,number);return first?{description:[regular?.description,'首購贈品：'+first.description].filter(Boolean).join('；'),kind:first.kind}:regular;})(),discount:await env.DB.prepare('SELECT * FROM order_discounts WHERE order_number=?').bind(number).first()};
  }
  if(path==='/api/admin/order-management'&&method==='POST'){
   const d=await body(request),number=str(d.orderNumber,60),note=str(d.admin_note||'',4000),carrier=str(d.carrier||'',100),tracking=str(d.tracking||'',100),version=integer(d.version,0,1000000);if(!await env.DB.prepare('SELECT order_number FROM orders WHERE order_number=?').bind(number).first())fail(404,'找不到訂單');

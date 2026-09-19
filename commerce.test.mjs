@@ -1,3 +1,4 @@
+import {firstGiftQuote,firstGiftStatements} from './first-purchase.js';
 import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {readFileSync} from 'node:fs';import {createHash} from 'node:crypto';import worker from './worker.js';import {catalogQuote,catalogGuards} from './commerce.js';
 import {defaults} from './homepage-config.js';
 import {youtubeId} from './content-model.js';
@@ -141,7 +142,7 @@ test('zero-value gift coupons create immutable order gifts, retain usage guards 
  const order={customer:{name:'test',country:'JP',address:'test',phone:'test'},items,payment:'bank',expectedTotal:q.total,coupon:'GIFT'};
  assert.equal((await call('/api/order','POST',order,'member',{'Idempotency-Key':'gift-overseas-order'})).status,400);
  const r=await call('/api/order','POST',{...order,customer:{...order.customer,country:'TW'}},'member',{'Idempotency-Key':'gift-domestic-order'});assert.equal(r.status,200,JSON.stringify(r.data));
- const detail=await call('/api/admin/order-management?order='+r.data.orderNumber);assert.equal(detail.data.gift.description,c.gift_text);assert.equal(detail.data.discount.discount,0);
+ const detail=await call('/api/admin/order-management?order='+r.data.orderNumber);assert.equal(detail.data.gift.description,c.gift_text+'；首購贈品：wugong 墨水一瓶');assert.equal(detail.data.discount.discount,0);
  assert.ok(sql.prepare('SELECT note FROM orders WHERE order_number=?').get(r.data.orderNumber).note.includes(c.gift_text));
  await assert.rejects(async()=>discountQuote(env,await catalogQuote(env,items),'GIFT','customer'));
  assert.equal((await call('/api/admin/coupon','POST',{...c,version:1,gift_text:'新贈品'})).status,200);
@@ -194,4 +195,25 @@ test('manual members support editable profiles and purchases without creating lo
  sql.exec("CREATE TRIGGER fail_profile_audit BEFORE INSERT ON commerce_audit WHEN NEW.action IN ('member.create','member.profile') BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");
  assert.equal((await call('/api/admin/member-profile','POST',{...update,version:2,updated_at:detail.member.updated_at,name:'不得保存'})).status,500);assert.equal(sql.prepare('SELECT name FROM members WHERE id=?').get(id).name,'更正姓名');
  const before=sql.prepare('SELECT count(*) n FROM members').get().n;assert.equal((await call('/api/admin/member-profile','POST',data)).status,500);assert.equal(sql.prepare('SELECT count(*) n FROM members').get().n,before);sql.close();
+});
+test('first pen gift settings are editable, region-safe, atomic and shared across campaigns',async()=>{
+ const {sql,env,call}=setup();const settings=(await call('/api/admin/first-purchase')).data.settings;assert.equal(settings[0].description,'wugong 墨水一瓶');assert.equal(settings[1].description,'藏娥筆記本一本');
+ for(const role of ['','member'])assert.equal((await call('/api/admin/first-purchase','POST',settings[0],role)).status,403);
+ assert.equal((await call('/api/admin/first-purchase','POST',settings[0],'admin',{Origin:'https://evil.test'})).status,403);
+ assert.equal((await call('/api/admin/first-purchase','POST',{...settings[1],kind:'ink'})).status,400);
+ const p=sql.prepare("SELECT * FROM products WHERE category='pen' LIMIT 1").get(),items=[{id:p.sku,nib:p.variant,quantity:1}];
+ const quote=await call('/api/checkout/quote','POST',{items,country:'TW'},'member');assert.equal(quote.status,200);assert.equal(quote.data.firstGift.kind,'ink');assert.equal((await call('/api/checkout/quote','POST',{items,country:'JP'},'member')).data.firstGift.kind,'other');
+ assert.equal(await firstGiftQuote(env,[{category:'ink'}],'customer','TW'),null);
+ const changed={...settings[0],title:'春季首購',description:'限定墨水一瓶'};assert.equal((await call('/api/admin/first-purchase','POST',changed)).status,200);assert.equal((await call('/api/admin/first-purchase','POST',changed)).status,409);
+ const order={items,customer:{name:'顧客',phone:'0900000000',address:'地址',country:'TW'},payment:'bank',expectedTotal:quote.data.total};let created=await call('/api/order','POST',order,'member',{'Idempotency-Key':'first-gift-order-001'});assert.equal(created.status,200,JSON.stringify(created.data));const number=created.data.orderNumber;
+ assert.match(sql.prepare('SELECT note FROM orders WHERE order_number=?').get(number).note,/限定墨水一瓶/);assert.equal((await call('/api/checkout/quote','POST',{items,country:'JP'},'member')).data.firstGift,null);
+ assert.equal((await call('/api/admin/order-management?order='+number)).data.gift.description,'首購贈品：限定墨水一瓶');
+ assert.equal((await call('/api/admin/first-purchase','POST',{...changed,version:1,description:'另一瓶墨水'})).status,200);assert.equal(sql.prepare('SELECT description FROM first_purchase_gifts WHERE order_number=?').get(number).description,'限定墨水一瓶');
+ sql.prepare("UPDATE checkout_reservations SET expires_at='2000-01-01' WHERE order_number=?").run(number);
+ const retry=await call('/api/checkout/quote','POST',{items,country:'TW'},'member');assert.equal(retry.data.firstGift.description,'另一瓶墨水');
+ // Two orders quoted before either writes must not both claim the gift.
+ const a=await firstGiftQuote(env,retry.data.items,'customer','TW'),b=await firstGiftQuote(env,retry.data.items,'customer','JP');
+ const create=number=>[env.DB.prepare("INSERT INTO orders(order_number,items,status) VALUES (?,'[]','pending')").bind(number),...firstGiftStatements(env,number==='RACE-A'?a:b,'customer',number)];await env.DB.batch(create('RACE-A'));await assert.rejects(()=>env.DB.batch(create('RACE-B')));assert.equal(sql.prepare("SELECT count(*) n FROM orders WHERE order_number='RACE-B'").get().n,0);
+ assert.equal(sql.prepare('SELECT count(*) n FROM first_purchase_claims WHERE member_id=?').get('customer').n,1);
+ sql.exec("CREATE TRIGGER fail_first_audit BEFORE INSERT ON commerce_audit WHEN NEW.action='coupon.first-purchase' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");assert.equal((await call('/api/admin/first-purchase','POST',{...changed,version:2,active:0})).status,500);assert.equal((await call('/api/admin/first-purchase')).data.settings[0].active,1);sql.close();
 });

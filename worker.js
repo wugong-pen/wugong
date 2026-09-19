@@ -1,3 +1,4 @@
+import {firstGiftQuote,firstGiftStatements} from './first-purchase.js';
 import {readHomepage,manageHomepage} from './homepage-store.js';
 import {publicContent,manageContent} from './content-store.js';
 import {discountQuote,couponStatements} from './modules.js';
@@ -269,7 +270,7 @@ async function api(request,env,url,ctx) {
     if(!result.meta.changes)fail(409,'匯款期限已過或尚未取得匯款資料');
     return json({success:true,message:'已收到回報，待人工核對；回報不代表付款完成'});
   }
-  if(path==='/api/checkout/quote'&&method==='POST'){const m=await session(request,env);sandbox(env);await expireReservations(env);const d=await body(request),q=await discountQuote(env,await catalogQuote(env,d.items),d.coupon,m.id);await checkStock(env,q.items);return json({success:true,...q,coupon:q.coupon?.code||null});}
+  if(path==='/api/checkout/quote'&&method==='POST'){const m=await session(request,env);sandbox(env);await expireReservations(env);const d=await body(request),q=await discountQuote(env,await catalogQuote(env,d.items),d.coupon,m.id);await checkStock(env,q.items);if(d.country&&!COUNTRY_CODES.includes(d.country))fail(400,'請選擇收件國家');if(d.country&&d.country!=='TW'&&q.coupon?.gift_kind==='ink'&&q.coupon?.kind==='gift')fail(400,'墨水贈品僅寄送台灣');const firstGift=await firstGiftQuote(env,q.items,m.id,d.country);return json({success:true,...q,firstGift,coupon:q.coupon?.code||null});}
   if(path==='/api/payments/ecpay/start'&&method==='POST'){
     const m=await session(request,env);sandbox(env);const data=await body(request);
     const order=await env.DB.prepare('SELECT o.* FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE o.order_number=? AND mo.member_id=?').bind(text(data.orderNumber,60,'訂單編號'),m.id).first();
@@ -287,14 +288,15 @@ async function api(request,env,url,ctx) {
     await expireReservations(env);
     const q=await discountQuote(env,await catalogQuote(env,order.items),order.coupon,m.id),{items,total}=q,number='WG'+random().slice(0,18);
     if(c.country!=='TW'&&(items.some(i=>i.category==='ink')||q.coupon?.kind==='gift'&&q.coupon.gift_kind==='ink'))fail(400,'墨水（含贈品）僅寄送台灣，請移除墨水商品或更換優惠券後再結帳');
+    const firstGift=await firstGiftQuote(env,items,m.id,c.country);if(firstGift?.kind==='ink'&&c.country!=='TW')fail(400,'墨水贈品僅寄送台灣');
     const shipping=text(order.shipping??'',40,'配送方式',false),payment=text(order.payment,30,'付款方式'),note=text(order.note??'',1000,'備註',false);
     if(methods(env,c.country)[payment]!==true)fail(400,'此付款方式尚未設定或不適用收件國家');
     if(order.expectedTotal!==total)fail(409,'商品金額已更新，請重新整理後確認');
     try{await env.DB.batch([
       ...catalogGuards(env,items),
-      env.DB.prepare('INSERT INTO orders(order_number,customer_name,phone,email,address,shipping,payment,note,items,total,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(number,name,phone,m.email,address,shipping,payment,note+(q.gift?'\n優惠券贈品：'+q.gift:''),JSON.stringify(items),total,'pending',new Date().toISOString()),
+      env.DB.prepare('INSERT INTO orders(order_number,customer_name,phone,email,address,shipping,payment,note,items,total,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(number,name,phone,m.email,address,shipping,payment,note+(q.gift?'\n優惠券贈品：'+q.gift:'')+(firstGift?'\n首購贈品：'+firstGift.description:''),JSON.stringify(items),total,'pending',new Date().toISOString()),
       env.DB.prepare('INSERT INTO member_orders(order_number,member_id,shipping_country,request_key) VALUES (?,?,?,?)').bind(number,m.id,c.country,key),
-      ...reserveStatements(env,number,items,payment),...couponStatements(env,q,m.id,number)
+      ...reserveStatements(env,number,items,payment),...couponStatements(env,q,m.id,number),...firstGiftStatements(env,firstGift,m.id,number)
     ]);}catch(error){const retry=await env.DB.prepare('SELECT order_number FROM member_orders WHERE member_id=? AND request_key=?').bind(m.id,key).first();if(!retry){if(error.message?.includes('CHECK constraint failed: quantity'))fail(409,'商品庫存不足，請調整數量後再試');throw error;}return json({success:true,orderNumber:retry.order_number});}
     return json({success:true,orderNumber:number});
   }
@@ -330,6 +332,6 @@ export default {
       if(/^\/(member|checkout)(\.html)?\/?$/.test(url.pathname))result.headers.set('Cache-Control','no-store');
       if(/^\/member(\.html)?\/?$/.test(url.pathname))result.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
       return result;
-    }catch(error){if(error.message?.includes('CHECK constraint failed: ok'))error=new HttpError(409,'資料已變更，請重新整理後再操作');if(!(error instanceof HttpError)) console.error("Member request failed", error.name, error.message); return json({success:false,error:error instanceof HttpError||[400,404,405,409,503].includes(error.status)?error.message:'服務暫時無法使用，請稍後再試'},error.status||500,env.APP_ENV==='staging'?{'X-Robots-Tag':'noindex, nofollow, noarchive'}:{});}
+    }catch(error){if(error.message?.includes('UNIQUE constraint failed: first_purchase_claims'))error=new HttpError(409,'首購贈品已由另一筆訂單保留，請重新整理後確認');if(error.message?.includes('CHECK constraint failed: ok'))error=new HttpError(409,'資料已變更，請重新整理後再操作');if(!(error instanceof HttpError)) console.error("Member request failed", error.name, error.message); return json({success:false,error:error instanceof HttpError||[400,404,405,409,503].includes(error.status)?error.message:'服務暫時無法使用，請稍後再試'},error.status||500,env.APP_ENV==='staging'?{'X-Robots-Tag':'noindex, nofollow, noarchive'}:{});}
   }
 };
