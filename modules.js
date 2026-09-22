@@ -1,4 +1,4 @@
-import {manageFirstGift} from './first-purchase.js';
+import {manageFirstGift,firstSchema} from './first-purchase.js';
 import {youtubeId} from './content-model.js';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 const num=(v,min,max)=>{if(!Number.isSafeInteger(v)||v<min||v>max)fail(400,'數字範圍不正確');return v;};
@@ -8,7 +8,7 @@ const audit=(env,m,action,target,before,after)=>env.DB.prepare('INSERT INTO comm
 export function youtube(value){return value?youtubeId(value):'';}
 export async function discountQuote(env,q,code,member){
  q.subtotal=q.total;q.discount=0;q.coupon=null;if(!code)return q;
- code=text(code,40).toUpperCase();const c=await env.DB.prepare('SELECT * FROM promotions WHERE code=?').bind(code).first(),now=new Date().toISOString();
+ code=text(code,40).toUpperCase();await firstSchema(env);if(await env.DB.prepare('SELECT 1 FROM first_purchase_codes WHERE code=?').bind(code).first())fail(400,'這是首購券，請填入首購券代碼欄位');const c=await env.DB.prepare('SELECT * FROM promotions WHERE code=?').bind(code).first(),now=new Date().toISOString();
  if(!c||!c.active||c.starts>now||c.ends<=now)fail(409,'優惠券不存在、未開始或已到期');
  if(await env.DB.prepare('SELECT 1 FROM promotion_claims WHERE code=? AND member_id=?').bind(code,member).first())fail(409,'此優惠券已使用或有未完成訂單保留中');
  const count=await env.DB.prepare('SELECT count(*) AS n FROM promotion_claims WHERE code=?').bind(code).first();if(count.n>=c.quota)fail(409,'優惠券名額已用完');
@@ -67,6 +67,7 @@ export async function manageModules(request,env,url,m,body){
   const amount=num(d.amount,kind==='gift'?0:1,kind==='percent'?100:10000000),minimum=num(d.minimum,0,10000000),maximum=num(d.maximum,kind==='gift'?0:1,10000000),quota=num(d.quota,1,1000000),active=num(d.active,0,1),gift_text=text(d.gift_text||'',500),gift_kind=text(d.gift_kind||'other',20);
   if(!['ink','other'].includes(gift_kind)||kind==='gift'&&(!gift_text||amount!==0||maximum!==0))fail(400,'贈品券請填寫贈品說明，折抵金額與上限須為 0');
   let starts,ends;try{starts=new Date(d.starts).toISOString();ends=new Date(d.ends).toISOString();}catch{fail(400,'請填寫有效起訖時間');}if(ends<=starts)fail(400,'結束時間須晚於開始時間');
+  await firstSchema(env);if(await env.DB.prepare('SELECT 1 FROM first_purchase_codes WHERE code=?').bind(code).first())fail(400,'此代碼已用於首購券');
   const old=await env.DB.prepare('SELECT * FROM promotions WHERE code=?').bind(code).first();if((old?.version||0)!==d.version)fail(409,'優惠券已更新，請重新載入');
   const values=[kind,amount,minimum,maximum,scope,target,starts,ends,quota,active,gift_text,gift_kind];const stmt=old?env.DB.prepare('UPDATE promotions SET kind=?,amount=?,minimum=?,maximum=?,scope=?,target=?,starts=?,ends=?,quota=?,active=?,gift_text=?,gift_kind=?,version=version+1 WHERE code=? AND version=?').bind(...values,code,d.version):env.DB.prepare('INSERT INTO promotions(kind,amount,minimum,maximum,scope,target,starts,ends,quota,active,gift_text,gift_kind,code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(...values,code);
   await env.DB.batch([stmt,check(env),audit(env,m,'coupon.update',code,old,{...d,code})]);return{};

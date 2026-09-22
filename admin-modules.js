@@ -44,16 +44,22 @@ export async function init({api,node,message}){
   f.append(node('p','品牌下可新增多個分類。儲存後會自動建立分類商品列表網址；商品在商品管理中選擇此分類。商品類型用於尖型選單與墨水寄送限制。'));
   submit(f,()=>api('/api/admin/categories','POST',{id:p.id,name:name.value,parent:parent.value,kind:kind.value,version:p.version}));
  }
+ async function firstCode(p={code:'',title:'首購會員贈品券',description:'',region:'TW',kind:'other',active:0,version:0}){
+  const f=form(p.version?'修改首購專用券':'新增首購專用券'),code=field(f,'首購券代碼（建立後固定）',p.code);code.required=true;code.maxLength=40;code.pattern='[-A-Za-z0-9_]+';code.readOnly=!!p.version;
+  const title=field(f,'首購券名稱',p.title),description=field(f,'贈送商品與數量',p.description,'textarea'),region=select(f,'適用收件地區',p.region,[['TW','台灣'],['overseas','海外'],['all','台灣與海外']]),kind=select(f,'贈品類型',p.kind,[['other','筆記本／其他非墨水商品'],['ink','墨水（僅台灣）']]),active=select(f,'狀態',String(p.active),[['0','停用／草稿'],['1','啟用']]);title.required=description.required=true;title.maxLength=100;description.maxLength=500;
+  f.append(node('p','使用資格：僅限首購會員，且本次購買鋼筆。每位會員首購優惠合計限一次，更換首購券代碼也不能重複領取。可與一張一般活動優惠券一起使用。'),node('p','會員在結帳頁的「首購券代碼」輸入此代碼。指定首購券會取代原本自動首購贈品，不會重複贈送。修改或重新啟用不會清除使用紀錄，已成立訂單保留原贈品。'));
+  submit(f,()=>api('/api/admin/first-coupons','POST',{code:code.value,title:title.value,description:description.value,region:region.value,kind:kind.value,active:Number(active.value),version:p.version}));
+ }
  async function firstPurchase(p){
   const settings=(await api('/api/admin/first-purchase')).settings;p=p||settings[0];const f=form('首購贈品優惠券設定');
   const region=select(f,'適用收件地區',p.region,[['TW','台灣'],['overseas','海外']]);region.onchange=()=>firstPurchase(settings.find(s=>s.region===region.value));
   const title=field(f,'首購優惠券名稱',p.title),description=field(f,'贈送商品與數量',p.description,'textarea'),kind=select(f,'贈品類型',p.kind,[['other','筆記本／其他非墨水商品'],['ink','墨水（僅台灣）']]),active=select(f,'自動贈送狀態',String(p.active),[['1','啟用'],['0','暫停贈送']]);title.required=description.required=true;title.maxLength=100;description.maxLength=500;
-  f.append(node('p','會員首次購買鋼筆時，依實際收件國家自動套用，無需輸入折扣碼。每位會員國內、海外合計限一次；未完成訂單會保留資格，取消或逾期後可重新使用。'),node('p','每個地區使用一組目前的首購贈品設定；可更改名稱、商品、數量或暫停。只影響後續新訂單，既有訂單的贈品保留。贈品由管理員依訂單備貨，目前不自動扣除贈品庫存。'),node('p','一般折扣碼每張訂單限一張；首購贈品另行自動套用，可與一般優惠券一起使用。'));
+  f.append(node('p','首購會員購買鋼筆時，依實際收件國家自動套用，無需輸入折扣碼。每位會員國內、海外合計限一次；未完成訂單會保留資格，取消或逾期後可重新使用。'),node('p','每個地區使用一組目前的首購贈品設定；可更改名稱、商品、數量或暫停。只影響後續新訂單，既有訂單的贈品保留。贈品由管理員依訂單備貨，目前不自動扣除贈品庫存。'),node('p','一般折扣碼每張訂單限一張；首購贈品另行自動套用，可與一般優惠券一起使用。'));
   submit(f,()=>api('/api/admin/first-purchase','POST',{region:p.region,title:title.value,description:description.value,kind:kind.value,active:Number(active.value),version:p.version}));
  }
  async function load(){view.replaceChildren();message('');if(section==='stock'){const {families}=await api('/api/admin/families');view.append(node('p','每個筆款只有一筆共用庫存；舊庫存須核對後才開放購買。'));for(const p of families)card(p.name,(!p.confirmed?'⚠ 待核對庫存':p.available<=p.threshold?'⚠ 低庫存':'庫存正常')+'｜可售 '+p.available+'｜提醒門檻 '+p.threshold,()=>stock(p));}
   if(section==='categories'){view.append(button('＋ 新增品牌／分類',()=>category()));const {categories}=await api('/api/admin/categories');for(const b of categories.filter(c=>!c.parent)){card(b.name,'品牌',()=>category(b));for(const c of categories.filter(c=>c.parent===b.id)){card(b.name+'／'+c.name,({pen:'鋼筆',ink:'墨水',craft:'其他商品'})[c.kind],()=>category(c));const a=node('a','查看前台分類頁');a.href='/shop.html?category='+encodeURIComponent(c.id);a.target='_blank';a.rel='noopener';view.append(a);}}}
   if(section==='nibs'){view.append(button('＋ 新增尖型',()=>nib()));for(const p of (await api('/api/admin/nibs')).nibs)card(p.name,p.active?'啟用':'停用',()=>nib(p));}
-  if(section==='coupons'){view.append(button('＋ 新增優惠券',()=>coupon()),button('＋ 新增／更改首購優惠券',()=>firstPurchase()),node('p','一般優惠券：會員在結帳頁輸入折扣碼，按「套用／清除優惠券」。首購贈品：首次購買鋼筆時依收件國家自動套用。'));for(const p of (await api('/api/admin/first-purchase')).settings)card(p.title,(p.region==='TW'?'台灣':'海外')+'｜'+(p.active?'自動贈送：':'暫停：')+p.description,()=>firstPurchase(p));for(const p of (await api('/api/admin/coupons')).coupons)card(p.code,(p.active?'啟用':'停用')+'｜已使用或保留 '+p.used+'/'+p.quota,()=>coupon(p));}
+  if(section==='coupons'){view.append(button('＋ 新增優惠券',()=>coupon()),button('＋ 新增首購專用券',()=>firstCode()),button('自動首購贈品設定',()=>firstPurchase()),node('p','一般優惠券：會員在結帳頁輸入折扣碼，按「套用／清除優惠券」。首購贈品：首次購買鋼筆時依收件國家自動套用。'));for(const p of (await api('/api/admin/first-coupons')).coupons)card('首購專用券：'+p.code,p.title+'｜'+(p.active?'啟用':'停用')+'｜使用／保留 '+p.used+'｜'+p.description,()=>firstCode(p));for(const p of (await api('/api/admin/first-purchase')).settings)card(p.title,(p.region==='TW'?'台灣':'海外')+'｜'+(p.active?'自動贈送：':'暫停：')+p.description,()=>firstPurchase(p));for(const p of (await api('/api/admin/coupons')).coupons)card(p.code,(p.active?'啟用':'停用')+'｜已使用或保留 '+p.used+'/'+p.quota,()=>coupon(p));}
  }await load();return true;
 }

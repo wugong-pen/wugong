@@ -217,3 +217,24 @@ test('first pen gift settings are editable, region-safe, atomic and shared acros
  assert.equal(sql.prepare('SELECT count(*) n FROM first_purchase_claims WHERE member_id=?').get('customer').n,1);
  sql.exec("CREATE TRIGGER fail_first_audit BEFORE INSERT ON commerce_audit WHEN NEW.action='coupon.first-purchase' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");assert.equal((await call('/api/admin/first-purchase','POST',{...changed,version:2,active:0})).status,500);assert.equal((await call('/api/admin/first-purchase')).data.settings[0].active,1);sql.close();
 });
+test('first-only gift codes stack with ordinary coupons and never reset eligibility on edit or code change',async()=>{
+ const {sql,call}=setup(),first={code:'FIRSTINK',title:'首購墨水券',description:'限定墨水一瓶',kind:'ink',region:'TW',active:1,version:0};
+ for(const role of ['','member'])assert.equal((await call('/api/admin/first-coupons','POST',first,role)).status,403);
+ assert.equal((await call('/api/admin/first-coupons','POST',first,'admin',{Origin:'https://evil.test'})).status,403);
+ assert.equal((await call('/api/admin/first-coupons','POST',{...first,region:'all'})).status,400);
+ assert.equal((await call('/api/admin/first-coupons','POST',first)).status,200);
+ assert.equal((await call('/api/admin/first-coupons','POST',{...first,code:'FIRSTBOOK',kind:'other',region:'all',description:'筆記本一本'})).status,200);
+ const ordinary={code:'SALE100',kind:'fixed',amount:100,maximum:100,minimum:0,scope:'all',target:'',starts:'2020-01-01',ends:'2099-01-01',quota:100,active:1,version:0};assert.equal((await call('/api/admin/coupon','POST',ordinary)).status,200);
+ assert.equal((await call('/api/admin/coupon','POST',{...ordinary,code:first.code})).status,400);assert.equal((await call('/api/admin/first-coupons','POST',{...first,code:ordinary.code})).status,400);
+ const items=[{id:'product-fuji',nib:'WUGONG 筆尖',quantity:1}];const payload={items,country:'TW',coupon:'SALE100',firstCoupon:'FIRSTINK'};
+ let q=await call('/api/checkout/quote','POST',payload,'member');assert.equal(q.status,200,JSON.stringify(q.data));assert.equal(q.data.total,119900);assert.equal(q.data.firstGift.code,'FIRSTINK');
+ assert.equal((await call('/api/checkout/quote','POST',{...payload,country:'JP'},'member')).status,400);assert.equal((await call('/api/checkout/quote','POST',{items,country:'TW',coupon:'FIRSTINK'},'member')).status,400);
+ const order={items,customer:{name:'會員',phone:'0900000000',address:'地址',country:'TW'},coupon:'SALE100',firstCoupon:'FIRSTINK',expectedTotal:q.data.total,payment:'bank'};const r=await call('/api/order','POST',order,'member',{'Idempotency-Key':'combined-coupons-001'});assert.equal(r.status,200,JSON.stringify(r.data));
+ assert.equal(sql.prepare('SELECT count(*) n FROM first_purchase_gifts').get().n,1);assert.equal(sql.prepare('SELECT code FROM first_purchase_redemptions').get().code,'FIRSTINK');assert.equal(sql.prepare('SELECT code FROM promotion_claims').get().code,'SALE100');assert.match(sql.prepare('SELECT note FROM orders WHERE order_number=?').get(r.data.orderNumber).note,/FIRSTINK/);
+ sql.prepare("UPDATE orders SET status='paid' WHERE order_number=?").run(r.data.orderNumber);sql.prepare("UPDATE checkout_reservations SET state='sold' WHERE order_number=?").run(r.data.orderNumber);
+ for(const firstCoupon of ['FIRSTINK','FIRSTBOOK'])assert.equal((await call('/api/checkout/quote','POST',{items,country:'TW',firstCoupon},'member')).status,409);
+ assert.equal((await call('/api/admin/first-coupons','POST',{...first,version:1,description:'更改贈品'})).status,200);assert.equal((await call('/api/checkout/quote','POST',{items,country:'TW',firstCoupon:'FIRSTINK'},'member')).status,409);assert.equal(sql.prepare('SELECT description FROM first_purchase_gifts').get().description,first.description);
+ assert.equal((await call('/api/checkout/quote','POST',{items,country:'TW',coupon:'SALE100'},'member')).status,409);assert.equal((await call('/api/admin/coupon','POST',{...ordinary,version:1,amount:80})).status,200);assert.equal((await call('/api/checkout/quote','POST',{items,country:'TW',coupon:'SALE100'},'member')).status,409);
+ assert.equal((await call('/api/admin/first-coupons')).data.coupons.find(c=>c.code==='FIRSTINK').used,1);sql.prepare("UPDATE orders SET status='cancelled' WHERE order_number=?").run(r.data.orderNumber);assert.equal((await call('/api/checkout/quote','POST',{items,country:'TW',firstCoupon:'FIRSTINK'},'member')).status,409);assert.equal(sql.prepare('SELECT count(*) n FROM first_purchase_redemptions').get().n,1);
+ sql.exec("CREATE TRIGGER deny_first_code_audit BEFORE INSERT ON commerce_audit WHEN NEW.action='coupon.first-code' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");assert.equal((await call('/api/admin/first-coupons','POST',{...first,version:2,active:0})).status,500);assert.equal(sql.prepare("SELECT active FROM first_purchase_codes WHERE code='FIRSTINK'").get().active,1);sql.close();
+});
