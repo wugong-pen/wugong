@@ -1,4 +1,4 @@
-import {firstGiftQuote,firstGiftStatements} from './first-purchase.js';
+import {firstGiftQuote,firstGiftStatements,firstSchema,firstGiftForOrder,giftPhone} from './first-purchase.js';
 import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {readFileSync} from 'node:fs';import {createHash} from 'node:crypto';import worker from './worker.js';import {catalogQuote,catalogGuards} from './commerce.js';
 import {defaults} from './homepage-config.js';
 import {youtubeId} from './content-model.js';
@@ -72,7 +72,7 @@ function setup(){const sql=new DatabaseSync(':memory:');sql.exec('CREATE TABLE o
  sql.exec(readFileSync(new URL('schema-modules.sql',import.meta.url),'utf8'));sql.exec(readFileSync(new URL('schema-categories-gifts.sql',import.meta.url),'utf8'));sql.exec("UPDATE product_families SET confirmed=1; UPDATE inventory SET available=5 WHERE sku LIKE 'body-%';");
  const DB={prepare(q){let params=[];return{bind(...v){params=v;return this;},async first(){return sql.prepare(q).get(...params)||null;},async all(){return{results:sql.prepare(q).all(...params)};},async run(){return{meta:{changes:sql.prepare(q).run(...params).changes}};}};},async batch(ss){sql.exec('BEGIN');try{const r=[];for(const s of ss)r.push(await s.run());sql.exec('COMMIT');return r;}catch(e){sql.exec('ROLLBACK');throw e;}}};
  for(const id of ['owner','customer'])sql.prepare('INSERT INTO members VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(id,id+'@example.test','password-hash',id,'1990-01-01','TW','','',1,'2026-09-14','2026-09-14');sql.exec("INSERT INTO admin_members VALUES ('owner',1,'now')");const token='a'.repeat(64),hash=createHash('sha256').update(token).digest('hex');sql.prepare('INSERT INTO admin_sessions VALUES (?,?,?,?)').run(hash,'owner','password-hash',Math.floor(Date.now()/1000)+3600);sql.prepare('INSERT INTO member_sessions VALUES (?,?,?)').run(hash,'customer',Math.floor(Date.now()/1000)+3600);
- const env={DB,APP_ENV:'staging',BANK_TEST_CONFIG:JSON.stringify({bank:'test',code:'test',branch:'test',holder:'test',account:'test',days:3})};
+ const env={DB,APP_ENV:'staging',PAYMENT_ORIGIN:'https://wugong-test.wugong-pen.workers.dev',BANK_TEST_CONFIG:JSON.stringify({bank:'test',code:'test',branch:'test',holder:'test',account:'test',days:3})};
  const call=async(path,method='GET',data,kind='admin',extra={})=>{const headers={Origin:'https://shop.test','Content-Type':'application/json',Cookie:kind==='admin'?'__Host-wugong_admin='+token:kind==='member'?'__Host-wugong_session='+token:'',...extra};const r=await worker.fetch(new Request('https://shop.test'+path,{method,headers,...(data===undefined?{}:{body:data instanceof Uint8Array?data:JSON.stringify(data)})}),env);return{status:r.status,headers:r.headers,data:r.headers.get('Content-Type')?.includes('json')?await r.json():new Uint8Array(await r.arrayBuffer())};};return{sql,env,call};}
 test('catalog CRUD changes pricing, archiving blocks checkout and stale edits roll back',async()=>{const{sql,env,call}=setup();
  assert.equal((await call('/api/catalog','GET',undefined,'')).data.products.length,6);
@@ -139,7 +139,7 @@ test('zero-value gift coupons create immutable order gifts, retain usage guards 
  const {sql,env,call}=setup(),c={code:'GIFT',kind:'gift',amount:0,maximum:0,minimum:100,scope:'all',target:'',gift_text:'贈送 wugong 墨水 1 瓶',gift_kind:'ink',starts:new Date(Date.now()-60000).toISOString(),ends:new Date(Date.now()+86400000).toISOString(),quota:1,active:1,version:0};
  assert.equal((await call('/api/admin/coupon','POST',{...c,gift_text:''})).status,400);assert.equal((await call('/api/admin/coupon','POST',c)).status,200);
  const items=[{id:'product-fuji',nib:'WUGONG 筆尖',quantity:1}],q=await discountQuote(env,await catalogQuote(env,items),'GIFT','customer');assert.equal(q.discount,0);assert.equal(q.total,120000);assert.equal(q.gift,c.gift_text);
- const order={customer:{name:'test',country:'JP',address:'test',phone:'test'},items,payment:'bank',expectedTotal:q.total,coupon:'GIFT'};
+ const order={customer:{name:'test',country:'JP',address:'test',phone:'+819012345678'},items,payment:'bank',expectedTotal:q.total,coupon:'GIFT'};
  assert.equal((await call('/api/order','POST',order,'member',{'Idempotency-Key':'gift-overseas-order'})).status,400);
  const r=await call('/api/order','POST',{...order,customer:{...order.customer,country:'TW'}},'member',{'Idempotency-Key':'gift-domestic-order'});assert.equal(r.status,200,JSON.stringify(r.data));
  const detail=await call('/api/admin/order-management?order='+r.data.orderNumber);assert.equal(detail.data.gift.description,c.gift_text+'；首購贈品：wugong 墨水一瓶');assert.equal(detail.data.discount.discount,0);
@@ -213,7 +213,7 @@ test('first pen gift settings are editable, region-safe, atomic and shared acros
  const retry=await call('/api/checkout/quote','POST',{items,country:'TW'},'member');assert.equal(retry.data.firstGift.description,'另一瓶墨水');
  // Two orders quoted before either writes must not both claim the gift.
  const a=await firstGiftQuote(env,retry.data.items,'customer','TW'),b=await firstGiftQuote(env,retry.data.items,'customer','JP');
- const create=number=>[env.DB.prepare("INSERT INTO orders(order_number,items,status) VALUES (?,'[]','pending')").bind(number),...firstGiftStatements(env,number==='RACE-A'?a:b,'customer',number)];await env.DB.batch(create('RACE-A'));await assert.rejects(()=>env.DB.batch(create('RACE-B')));assert.equal(sql.prepare("SELECT count(*) n FROM orders WHERE order_number='RACE-B'").get().n,0);
+ const create=number=>[env.DB.prepare("INSERT INTO orders(order_number,items,status) VALUES (?,'[]','pending')").bind(number),...firstGiftStatements(env,number==='RACE-A'?a:b,'customer',number,'+886900000000')];await env.DB.batch(create('RACE-A'));await assert.rejects(()=>env.DB.batch(create('RACE-B')));assert.equal(sql.prepare("SELECT count(*) n FROM orders WHERE order_number='RACE-B'").get().n,0);
  assert.equal(sql.prepare('SELECT count(*) n FROM first_purchase_claims WHERE member_id=?').get('customer').n,1);
  sql.exec("CREATE TRIGGER fail_first_audit BEFORE INSERT ON commerce_audit WHEN NEW.action='coupon.first-purchase' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");assert.equal((await call('/api/admin/first-purchase','POST',{...changed,version:2,active:0})).status,500);assert.equal((await call('/api/admin/first-purchase')).data.settings[0].active,1);sql.close();
 });
@@ -235,6 +235,80 @@ test('first-only gift codes stack with ordinary coupons and never reset eligibil
  for(const firstCoupon of ['FIRSTINK','FIRSTBOOK'])assert.equal((await call('/api/checkout/quote','POST',{items,country:'TW',firstCoupon},'member')).status,409);
  assert.equal((await call('/api/admin/first-coupons','POST',{...first,version:1,description:'更改贈品'})).status,200);assert.equal((await call('/api/checkout/quote','POST',{items,country:'TW',firstCoupon:'FIRSTINK'},'member')).status,409);assert.equal(sql.prepare('SELECT description FROM first_purchase_gifts').get().description,first.description);
  assert.equal((await call('/api/checkout/quote','POST',{items,country:'TW',coupon:'SALE100'},'member')).status,409);assert.equal((await call('/api/admin/coupon','POST',{...ordinary,version:1,amount:80})).status,200);assert.equal((await call('/api/checkout/quote','POST',{items,country:'TW',coupon:'SALE100'},'member')).status,409);
- assert.equal((await call('/api/admin/first-coupons')).data.coupons.find(c=>c.code==='FIRSTINK').used,1);sql.prepare("UPDATE orders SET status='cancelled' WHERE order_number=?").run(r.data.orderNumber);assert.equal((await call('/api/checkout/quote','POST',{items,country:'TW',firstCoupon:'FIRSTINK'},'member')).status,409);assert.equal(sql.prepare('SELECT count(*) n FROM first_purchase_redemptions').get().n,1);
+ assert.equal((await call('/api/admin/first-coupons')).data.coupons.find(c=>c.code==='FIRSTINK').used,1);sql.prepare("UPDATE orders SET status='cancelled' WHERE order_number=?").run(r.data.orderNumber);assert.equal((await call('/api/checkout/quote','POST',{items,country:'TW',firstCoupon:'FIRSTINK'},'member')).status,200);assert.equal(sql.prepare('SELECT count(*) n FROM first_purchase_redemptions').get().n,0);
  sql.exec("CREATE TRIGGER deny_first_code_audit BEFORE INSERT ON commerce_audit WHEN NEW.action='coupon.first-code' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");assert.equal((await call('/api/admin/first-coupons','POST',{...first,version:2,active:0})).status,500);assert.equal(sql.prepare("SELECT active FROM first_purchase_codes WHERE code='FIRSTINK'").get().active,1);sql.close();
+});
+
+test('phone normalization equates international and local forms without conflating countries',()=>{
+ for(const phone of ['0912-345-678','+886 912 345 678','00886 912345678','886912345678','+886 (0)912345678','０９１２３４５６７８'])assert.equal(giftPhone(phone,'TW'),'+886912345678');
+ assert.equal(giftPhone('090-1234-5678','JP'),'+819012345678');assert.equal(giftPhone('+81 (0)90 1234 5678','TW'),'+819012345678');
+ assert.equal(giftPhone('010-1234-5678','KR'),'+821012345678');assert.equal(giftPhone('(415) 555-0123','US'),'+14155550123');assert.equal(giftPhone('1-415-555-0123','US'),'+14155550123');
+ assert.equal(giftPhone('9123 4567','SG'),'+6591234567');assert.equal(giftPhone('6591234567','SG'),'+6591234567');
+ for(const invalid of ['test','000','+12abc345678','+123;45678','+1234567890123456'])assert.equal(giftPhone(invalid,'TW'),'');
+});
+
+test('first gifts are held until administrator completes, never touch gift stock, and cancellation restores member and phone',async()=>{
+ const {sql,env,call}=setup(),items=[{id:'product-fuji',nib:'WUGONG 筆尖',quantity:1}],order={items,customer:{name:'顧客',phone:'0912345678',address:'地址',country:'TW'},payment:'bank',expectedTotal:120000};
+ const before=sql.prepare('SELECT * FROM inventory ORDER BY sku').all();
+ const created=await call('/api/order','POST',order,'member',{'Idempotency-Key':'gift-lifecycle-00001'});assert.equal(created.status,200,JSON.stringify(created.data));const number=created.data.orderNumber;
+ assert.equal((await firstGiftForOrder(env,number)).state,'reserved');assert.match(sql.prepare('SELECT note FROM orders WHERE order_number=?').get(number).note,/如贈品送完/);
+ for(const row of before){const after=sql.prepare('SELECT * FROM inventory WHERE sku=?').get(row.sku);assert.equal(after.available,row.available-(row.sku==='body-product-fuji'?1:0));assert.equal(after.sold,row.sold);}
+ const otherMember='other-account';
+ assert.equal(await firstGiftQuote(env,[{category:'pen'}],otherMember,'TW','','+886 912 345 678'),null);
+ assert.ok(await firstGiftQuote(env,[{category:'pen'}],otherMember,'TW','','0912345679'));
+ // Start bank transfer (without a report), then cancel through the authenticated admin route.
+ assert.equal((await call('/api/payments/start','POST',{orderNumber:number},'member')).status,200);
+ const cancel={orderNumber:number,expectedStatus:'pending',status:'cancelled'};
+ assert.equal((await call('/api/admin/order/status','POST',cancel,'member')).status,403);
+ assert.equal((await call('/api/admin/order/status','POST',cancel,'admin',{Origin:'https://evil.test'})).status,403);
+ assert.equal((await call('/api/admin/order/status','POST',cancel)).status,200);
+ assert.equal((await call('/api/admin/order/status','POST',cancel)).status,409);
+ assert.deepEqual(sql.prepare('SELECT * FROM inventory ORDER BY sku').all(),before);
+ assert.equal((await firstGiftForOrder(env,number)).state,'released');assert.equal(sql.prepare('SELECT count(*) n FROM first_purchase_claims').get().n,0);
+ assert.ok(await firstGiftQuote(env,[{category:'pen'}],'customer','TW','','0912345678'));
+ assert.ok(await firstGiftQuote(env,[{category:'pen'}],otherMember,'TW','','+886912345678'));
+ const again=await call('/api/order','POST',order,'member',{'Idempotency-Key':'gift-lifecycle-00002'});assert.equal(again.status,200);const number2=again.data.orderNumber;
+ assert.equal((await call('/api/payments/start','POST',{orderNumber:number2},'member')).status,200);
+ const row=sql.prepare('SELECT * FROM orders WHERE order_number=?').get(number2);await settlePayment(env,row,'paypal','gift-test-transaction');
+ assert.equal((await firstGiftForOrder(env,number2)).state,'reserved');
+ assert.equal((await call('/api/admin/order/status','POST',{orderNumber:number2,expectedStatus:'test_paid',status:'shipped'})).status,200);
+ assert.equal((await firstGiftForOrder(env,number2)).state,'reserved');
+ sql.exec("CREATE TRIGGER gift_audit_failure BEFORE INSERT ON admin_audit BEGIN SELECT RAISE(ABORT,'audit failure'); END");
+ const complete={orderNumber:number2,expectedStatus:'shipped',status:'completed'};
+ assert.equal((await call('/api/admin/order/status','POST',complete)).status,500);assert.equal((await firstGiftForOrder(env,number2)).state,'reserved');sql.exec('DROP TRIGGER gift_audit_failure');
+ assert.equal((await call('/api/admin/order/status','POST',complete)).status,200);assert.equal((await firstGiftForOrder(env,number2)).state,'received');
+ assert.equal(await firstGiftQuote(env,[{category:'pen'}],otherMember,'TW','','+886912345678'),null);
+ // A completed order cancelled by a verified refund workflow must release eligibility even with a retained receipt.
+ sql.prepare("UPDATE orders SET status='cancelled' WHERE order_number=?").run(number2);
+ assert.ok(await firstGiftQuote(env,[{category:'pen'}],'customer','TW','','+886912345678'));
+ assert.equal(sql.prepare('SELECT count(*) n FROM payment_receipts').get().n,1);assert.equal(sql.prepare('SELECT count(*) n FROM first_purchase_gifts').get().n,2);
+ sql.close();
+});
+
+test('different accounts quoted before either writes cannot reserve the same phone twice',async()=>{
+ const {sql,env}=setup();await firstSchema(env);const gift=await firstGiftQuote(env,[{category:'pen'}],'customer','TW','','0912345678');
+ const statements=(number,member)=>[env.DB.prepare("INSERT INTO orders(order_number,status) VALUES (?,'pending')").bind(number),...firstGiftStatements(env,gift,member,number,'+886912345678')];
+ await env.DB.batch(statements('PHONE-A','customer'));
+ await assert.rejects(()=>env.DB.batch(statements('PHONE-B','other-account')));
+ assert.equal(sql.prepare("SELECT count(*) n FROM orders WHERE order_number='PHONE-B'").get().n,0);
+ assert.equal(sql.prepare('SELECT count(*) n FROM first_purchase_phones').get().n,1);
+ sql.prepare("UPDATE orders SET status='cancelled' WHERE order_number='PHONE-A'").run();
+ await env.DB.batch(statements('PHONE-C','other-account'));
+ assert.equal(sql.prepare('SELECT count(*) n FROM first_purchase_claims').get().n,1);sql.close();
+});
+
+test('legacy phone history is indexed and safe cancellation cannot release uncertain or reported payments',async()=>{
+ const {sql,env,call}=setup();await firstSchema(env);
+ sql.exec("INSERT INTO orders(order_number,phone,status) VALUES ('LEGACY','0912-345-678','completed'); INSERT INTO member_orders VALUES ('LEGACY','customer','TW','legacy-gift-key'); INSERT INTO first_purchase_gifts VALUES ('LEGACY','首購','墨水','ink','TW')");
+ assert.equal(await firstGiftQuote(env,[{category:'pen'}],'new-account','TW','','+886912345678'),null);
+ const first={code:'ONCE',title:'一次',description:'筆記本',kind:'other',region:'all',active:1,version:0};assert.equal((await call('/api/admin/first-coupons','POST',first)).status,200);
+ const items=[{id:'product-fuji',nib:'WUGONG 筆尖',quantity:1}];const order={items,customer:{name:'顧客',phone:'0912345679',address:'地址',country:'TW'},payment:'bank',expectedTotal:120000};
+ // Existing buyer still purchases normally, with no extra gift.
+ const made=await call('/api/order','POST',order,'member',{'Idempotency-Key':'reported-no-cancel-01'});assert.equal(made.status,200);const number=made.data.orderNumber;
+ assert.equal((await call('/api/payments/start','POST',{orderNumber:number},'member')).status,200);
+ sql.prepare("UPDATE payment_attempts SET reported_at='2026-09-22' WHERE order_number=?").run(number);
+ const before=sql.prepare('SELECT * FROM inventory ORDER BY sku').all();const cancel={orderNumber:number,expectedStatus:'pending',status:'cancelled'};
+ assert.equal((await call('/api/admin/order/status','POST',cancel)).status,409);assert.deepEqual(sql.prepare('SELECT * FROM inventory ORDER BY sku').all(),before);
+ sql.prepare('UPDATE payment_attempts SET reported_at=NULL WHERE order_number=?').run(number);sql.prepare("UPDATE orders SET payment='paypal' WHERE order_number=?").run(number);
+ assert.equal((await call('/api/admin/order/status','POST',cancel)).status,409);assert.deepEqual(sql.prepare('SELECT * FROM inventory ORDER BY sku').all(),before);sql.close();
 });

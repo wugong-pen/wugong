@@ -30,12 +30,17 @@ async function loadOrders(){
 }
 async function loadDetail(){
  message('正在讀取訂單…');$('content').replaceChildren();$('advance').hidden=true;
+ document.getElementById('cancel-order')?.remove();document.getElementById('cancel-confirmation')?.remove();
  try{const number=new URLSearchParams(location.search).get('order');if(!number)throw new Error('缺少訂單編號');
   const {order:o}=await api('/api/admin/orders/'+encodeURIComponent(number));currentOrder=o;
   const dl=node('dl');for(const [label,value] of [['訂單編號',o.order_number],['姓名',o.customer_name],['電話',o.phone],['電子郵件',o.email],['收件國家',o.shipping_country||'未記錄'],['收件地址',o.address],['商品',items(o.items)],['金額',money(o.total)],['付款方式',payments[o.payment]||o.payment],['配送方式',o.shipping],['狀態',labels[o.status]||o.status],['備註',o.note||'無'],['下單時間',date(o.created_at)]])dl.append(node('dt',label),node('dd',value));$('content').append(dl);
-  if(['paid','shipped'].includes(o.status)){$('advance').textContent=o.status==='paid'?'標記為已出貨':'標記為已完成';$('advance').hidden=false;}
+  if(['paid','test_paid','shipped'].includes(o.status)){$('advance').textContent=o.status!=='shipped'?'標記為已出貨':'標記為已完成';$('advance').hidden=false;}
   message('');
   await orderManagement(o.order_number);
+  if(o.status==='pending'){
+   const cancel=node('button','取消未付款訂單');cancel.id='cancel-order';cancel.type='button';$('advance').after(cancel);
+   cancel.onclick=()=>{cancel.hidden=true;const panel=node('section');panel.id='cancel-confirmation';panel.className='card';panel.append(node('p','確認取消此訂單？商品保留將釋放，首購贈品資格會恢復。已回報匯款或付款確認中的訂單須先核對。'));const confirmCancel=node('button','確認取消訂單'),back=node('button','返回');confirmCancel.type=back.type='button';panel.append(confirmCancel,back);cancel.after(panel);back.onclick=()=>{panel.remove();cancel.hidden=false;};confirmCancel.onclick=async()=>{confirmCancel.disabled=back.disabled=true;try{await api('/api/admin/order/status','POST',{orderNumber:o.order_number,expectedStatus:'pending',status:'cancelled'});await loadDetail();message('訂單已取消，首購贈品資格已釋放。');}catch(e){await loadDetail();message(e.message);}};};
+  }
  }catch(e){message(e.message);}
 }
 if(document.body.dataset.page==='login'){
@@ -48,13 +53,14 @@ if(document.body.dataset.page==='login'){
   else if(document.body.dataset.page==='orders'){
    const search=node('form');search.className='search-form';const input=node('input');input.id='order-search';input.placeholder='搜尋訂單編號、收件人或信箱';input.maxLength=100;input.setAttribute('aria-label','搜尋訂單');const select=node('select');select.id='order-status';select.setAttribute('aria-label','訂單狀態');for(const [v,label]of [['','全部狀態'],...Object.entries(labels)]){const option=node('option',label);option.value=v;select.append(option);}const submit=node('button','篩選');search.append(input,select,submit);$('message').after(search);search.onsubmit=e=>{e.preventDefault();page=1;loadOrders();};
    $('refresh').onclick=loadOrders;$('previous').onclick=()=>{page--;loadOrders();};$('next').onclick=()=>{page++;loadOrders();};await loadOrders();}
-  else{$('advance').onclick=async()=>{const button=$('advance');button.disabled=true;try{await api('/api/admin/order/status','POST',{orderNumber:currentOrder.order_number,expectedStatus:currentOrder.status,status:currentOrder.status==='paid'?'shipped':'completed'});await loadDetail();}catch(e){await loadDetail();message(e.message);}finally{button.disabled=false;}};await loadDetail();}
+  else{$('advance').onclick=async()=>{const button=$('advance');button.disabled=true;try{await api('/api/admin/order/status','POST',{orderNumber:currentOrder.order_number,expectedStatus:currentOrder.status,status:currentOrder.status!=='shipped'?'shipped':'completed'});await loadDetail();}catch(e){await loadDetail();message(e.message);}finally{button.disabled=false;}};await loadDetail();}
  }catch(e){message(e.message);}
 }
 async function orderManagement(number){
  document.getElementById('order-management')?.remove();
  const d=await api('/api/admin/order-management?order='+encodeURIComponent(number)),form=node('form');form.id='order-management';form.className='manage-form';form.append(node('h2','內部備註與出貨資料'));
- if(d.gift)form.append(node('p','贈送商品：'+d.gift.description+'（請核對出貨）'));
+ if(d.firstGift)form.append(node('p','首購資格：'+({reserved:'保留中（完成訂單後記為已領取）',received:'已領取',released:'已恢復資格；本取消／失效訂單不再贈送'})[d.firstGift.state]),node('p',d.firstGift.notice));
+ if(d.gift)form.append(node('p',(d.firstGift?.state==='released'?'原訂單贈品紀錄：':'贈送商品：')+d.gift.description+(d.firstGift?.state==='released'?'（此訂單已失效）':'（請核對出貨）')));
  if(d.discount)form.append(node('p','優惠券 '+d.discount.code+'｜商品小計 NT$'+d.discount.subtotal.toLocaleString()+'｜折抵 NT$'+d.discount.discount.toLocaleString()));
  const inputs={};for(const [key,label]of [['admin_note','內部備註（不會顯示給會員）'],['carrier','物流公司'],['tracking','物流單號']]){const l=node('label',label),input=node(key==='admin_note'?'textarea':'input');input.value=d.management[key];input.maxLength=key==='admin_note'?4000:100;l.append(input);form.append(l);inputs[key]=input;}
  if(d.remittance?.reported_at)form.append(node('p','會員匯款回報：末五碼 '+d.remittance.remittance_last5+'；日期 '+d.remittance.remittance_date+'。回報尚不代表收款完成。'));

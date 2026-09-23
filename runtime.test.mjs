@@ -4,6 +4,7 @@ import {createRequire} from 'node:module';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {checkMac} from './ecpay.js';
+import {firstGiftQuote,firstGiftStatements,firstGiftForOrder} from './first-purchase.js';
 const require=createRequire(import.meta.url);
 const {Miniflare,convertV4MiniflareOptions}=require(require.resolve('miniflare',{paths:[require.resolve('wrangler')]}));
 test('Cloudflare runtime supports password hashing and D1 membership',async()=>{
@@ -45,7 +46,7 @@ test('Cloudflare runtime supports password hashing and D1 membership',async()=>{
  assert.equal((await mf.dispatchFetch('https://shop.test/api/content-entry?id='+contentEntry.id)).status,404);
  const competingContent=await Promise.all([1,2].map(()=>mf.dispatchFetch('https://shop.test/api/admin/content-entry',{method:'POST',headers:homeHeaders,body:JSON.stringify({...contentEntry,status:'published'})})));assert.deepEqual(competingContent.map(r=>r.status).sort(),[200,409]);
  assert.equal((await (await mf.dispatchFetch('https://shop.test/api/content?kind=events')).json()).entries[0].title,'Runtime event');
- const payload={customer:{name:'測試',phone:'0000000000',address:'測試地址',country:'TW'},items:[{id:'pojun-單尖',nib:'單尖',price:1,quantity:1}],expectedTotal:25000,payment:'bank',shipping:'宅配'};
+ const payload={customer:{name:'測試',phone:'0900000000',address:'測試地址',country:'TW'},items:[{id:'pojun-單尖',nib:'單尖',price:1,quantity:1}],expectedTotal:25000,payment:'bank',shipping:'宅配'};
   const orderResponse=await mf.dispatchFetch('https://shop.test/api/order',{method:'POST',headers:{Origin:'https://shop.test','Content-Type':'application/json',Cookie:cookie,'Idempotency-Key':'runtime-payment-0001'},body:JSON.stringify(payload)});
   const order=await orderResponse.json();assert.equal(orderResponse.status,200,JSON.stringify(order));
   const params={MerchantID:'3002607',MerchantTradeNo:order.orderNumber,TradeAmt:'25000',RtnCode:'1',SimulatePaid:'0',TradeNo:'runtime123',PaymentType:'Credit_CreditCard'};
@@ -87,6 +88,24 @@ test('Cloudflare runtime supports password hashing and D1 membership',async()=>{
   assert.equal((await db.prepare('SELECT count(*) n FROM promotion_claims').first()).n,1);
   const png=new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6v1UAAAAASUVORK5CYII=','base64'));
   const uploaded=await mf.dispatchFetch('https://shop.test/api/admin/images',{method:'POST',headers:{...adminHeaders,'Content-Type':'image/png'},body:png});assert.equal(uploaded.status,200);const uploadedData=await uploaded.json();const media=await mf.dispatchFetch('https://shop.test'+uploadedData.url);assert.deepEqual(new Uint8Array(await media.arrayBuffer()),png);
+  // D1 serializes competing gift reservations, including different accounts sharing a phone.
+  const giftEnv={DB:db};
+  const gift=await firstGiftQuote(giftEnv,[{category:'pen'}],'phone-runtime-a','TW','','0912345678');assert.ok(gift);
+  const giftBatch=(number,member)=>[
+   db.prepare("INSERT INTO orders(order_number,status,phone) VALUES (?,'pending','0912345678')").bind(number),
+   ...firstGiftStatements(giftEnv,gift,member,number,'+886912345678')
+  ];
+  const phoneRace=await Promise.allSettled([db.batch(giftBatch('PHONE-RUNTIME-A','phone-runtime-a')),db.batch(giftBatch('PHONE-RUNTIME-B','phone-runtime-b'))]);
+  assert.equal(phoneRace.filter(r=>r.status==='fulfilled').length,1);
+  assert.equal((await db.prepare("SELECT count(*) n FROM orders WHERE order_number LIKE 'PHONE-RUNTIME-%'").first()).n,1);
+  const held=await db.prepare("SELECT order_number FROM orders WHERE order_number LIKE 'PHONE-RUNTIME-%'").first();
+  await db.prepare("UPDATE orders SET status='shipped' WHERE order_number=?").bind(held.order_number).run();
+  assert.equal((await firstGiftForOrder(giftEnv,held.order_number)).state,'reserved');
+  assert.equal((await post('/api/admin/order/status',{orderNumber:held.order_number,expectedStatus:'shipped',status:'completed'},adminHeaders)).status,200);
+  assert.equal((await firstGiftForOrder(giftEnv,held.order_number)).state,'received');
+  await db.prepare("UPDATE orders SET status='cancelled' WHERE order_number=?").bind(held.order_number).run();
+  assert.equal((await db.prepare('SELECT count(*) n FROM first_purchase_claims WHERE order_number=?').bind(held.order_number).first()).n,0);
+  assert.ok(await firstGiftQuote(giftEnv,[{category:'pen'}],'phone-runtime-new','TW','','+886 912345678'));
  }finally{await mf.dispose();}
 });
 

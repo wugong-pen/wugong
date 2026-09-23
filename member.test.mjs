@@ -37,7 +37,7 @@ test('member lifecycle, owner-only orders, validation and session revocation',as
  assert.equal((await call('/api/member','PATCH',{...registration,name:'新的姓名',phone:'0900000000',address:'測試地址'},tokenA)).status,200);
  assert.equal((await call('/api/member','GET',undefined,tokenA)).data.member.name,'新的姓名');
  const b=await call('/api/member/register','POST',{...registration,email:'member-b@example.test',name:'測試乙'});const tokenB=b.headers.get('set-cookie').split(';')[0];
- const order={customer:{name:'測試收件人',phone:'0000000000',address:'測試地址',country:'TW',email:'spoof@example.test'},items:[{id:'product-fuji',product:'測試鋼筆',nib:'WUGONG 筆尖',price:100,quantity:2}],shipping:'宅配',payment:'bank',expectedTotal:240000,total:1,memberId:b.data.member.id};
+ const order={customer:{name:'測試收件人',phone:'0900000000',address:'測試地址',country:'TW',email:'spoof@example.test'},items:[{id:'product-fuji',product:'測試鋼筆',nib:'WUGONG 筆尖',price:100,quantity:2}],shipping:'宅配',payment:'bank',expectedTotal:240000,total:1,memberId:b.data.member.id};
  const submitted=await call('/api/order','POST',order,tokenA,{'Idempotency-Key':'test-order-00000001'});assert.equal(submitted.status,200,JSON.stringify(submitted.data));
  const duplicate=await call('/api/order','POST',order,tokenA,{'Idempotency-Key':'test-order-00000001'});assert.equal(duplicate.data.orderNumber,submitted.data.orderNumber);
  assert.equal(DB.sql.prepare('SELECT count(*) n FROM orders').get().n,1);

@@ -20,7 +20,7 @@ test('bank checkout persists deadline, enforces ownership, and never marks repor
  const env={DB,APP_ENV:'staging',PAYMENT_ORIGIN:'https://wugong-test.wugong-pen.workers.dev',BANK_TEST_CONFIG:JSON.stringify({bank:'測試銀行',code:'TEST',branch:'測試分行',holder:'測試戶名',account:'TEST',days:3})};
  const call=async(path,data,cookie='')=>{const r=await worker.fetch(new Request('https://shop.test'+path,{method:'POST',headers:{Origin:'https://shop.test','Content-Type':'application/json',Cookie:cookie,'Idempotency-Key':'bank-test-order-0001'},body:JSON.stringify(data)}),env);return {status:r.status,headers:r.headers,...await r.json()};};
  const member=await call('/api/member/register',{email:'bank@example.test',password:'a long bank test password',name:'測試',birthday:'1990-01-01',country:'TW'});const cookie=member.headers.get('set-cookie').split(';')[0];
- const order=await call('/api/order',{customer:{name:'測試',phone:'000',address:'測試',country:'TW'},items:[{id:'pojun-單尖',nib:'單尖',quantity:1}],payment:'bank',expectedTotal:25000},cookie);assert.equal(order.success,true);
+ const order=await call('/api/order',{customer:{name:'測試',phone:'0900000000',address:'測試',country:'TW'},items:[{id:'pojun-單尖',nib:'單尖',quantity:1}],payment:'bank',expectedTotal:25000},cookie);assert.equal(order.success,true);
  const bank=await call('/api/payments/start',{orderNumber:order.orderNumber},cookie);assert.equal(bank.success,true,JSON.stringify(bank));assert.equal(bank.bank.account,'TEST');
  const created=DB.sql.prepare('SELECT created_at FROM orders').get().created_at;assert.equal(Date.parse(bank.dueAt)-Date.parse(created),3*86400000);
  assert.equal((await call('/api/payments/start',{orderNumber:order.orderNumber},cookie)).dueAt,bank.dueAt);
