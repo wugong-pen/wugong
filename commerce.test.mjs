@@ -1,3 +1,4 @@
+import {shippingQuote,shippingStatements} from './shipping.js';
 import {firstGiftQuote,firstGiftStatements,firstSchema,firstGiftForOrder,giftPhone} from './first-purchase.js';
 import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {readFileSync} from 'node:fs';import {createHash} from 'node:crypto';import worker from './worker.js';import {catalogQuote,catalogGuards} from './commerce.js';
 import {defaults} from './homepage-config.js';
@@ -311,4 +312,41 @@ test('legacy phone history is indexed and safe cancellation cannot release uncer
  assert.equal((await call('/api/admin/order/status','POST',cancel)).status,409);assert.deepEqual(sql.prepare('SELECT * FROM inventory ORDER BY sku').all(),before);
  sql.prepare('UPDATE payment_attempts SET reported_at=NULL WHERE order_number=?').run(number);sql.prepare("UPDATE orders SET payment='paypal' WHERE order_number=?").run(number);
  assert.equal((await call('/api/admin/order/status','POST',cancel)).status,409);assert.deepEqual(sql.prepare('SELECT * FROM inventory ORDER BY sku').all(),before);sql.close();
+});
+
+test('shipping settings require admin, confirmed fees, version checks and an atomic audit',async()=>{
+ const {sql,call}=setup();
+ const rows=(await call('/api/admin/shipping')).data.regions;assert.equal(rows.length,6);assert.equal(rows.find(r=>r.country==='US').fee,null);
+ assert.deepEqual((await call('/api/shipping','GET',undefined,'')).data.regions,[{country:'TW',fee:0}]);
+ const jp={country:'JP',enabled:1,fee:800,note:'test only',version:1};
+ for(const role of ['','member'])assert.equal((await call('/api/admin/shipping','POST',jp,role)).status,403);
+ assert.equal((await call('/api/admin/shipping','POST',jp,'admin',{Origin:'https://evil.test'})).status,403);
+ for(const invalid of [{fee:null},{fee:-1},{fee:1.5},{fee:'800'},{country:'XX'},{enabled:2}])assert.equal((await call('/api/admin/shipping','POST',{...jp,...invalid})).status,400);
+ assert.equal((await call('/api/admin/shipping','POST',jp)).status,200);assert.equal((await call('/api/admin/shipping','POST',jp)).status,409);
+ const publicRows=(await call('/api/shipping','GET',undefined,'')).data.regions;assert.ok(publicRows.some(r=>r.country==='JP'));assert.ok(publicRows.every(r=>!('note' in r)));
+ sql.exec("CREATE TRIGGER fail_shipping_audit BEFORE INSERT ON commerce_audit WHEN NEW.action='shipping.update' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");
+ assert.equal((await call('/api/admin/shipping','POST',{...jp,fee:999,version:2})).status,500);assert.equal(sql.prepare("SELECT fee FROM shipping_regions WHERE country='JP'").get().fee,800);sql.close();
+});
+test('shipping fees are server calculated after discounts; disabled routes and stale quotes fail closed',async()=>{
+ const {sql,env,call}=setup();env.PAYPAL_SANDBOX_CLIENT_ID='test';env.PAYPAL_SANDBOX_CLIENT_SECRET='test';
+ const items=[{id:'product-fuji',nib:'WUGONG 筆尖',quantity:1}],payload={items,country:'HK',phone:'+852 21234567'};
+ let q=await call('/api/checkout/quote','POST',payload,'member');assert.equal(q.data.shippingReady,false);assert.equal(q.data.shippingFee,null);
+ assert.equal((await call('/api/payments/methods?country=HK','GET',undefined,'member')).data.methods.paypal,false);
+ const base={items,customer:{country:'HK',name:'顧客',phone:'+852 21234567',address:'地址'},payment:'paypal',expectedTotal:120000};
+ assert.equal((await call('/api/order','POST',base,'member',{'Idempotency-Key':'shipping-disabled-0001'})).status,400);
+ assert.equal((await call('/api/admin/shipping','POST',{country:'HK',enabled:1,fee:600,note:'test',version:1})).status,200);
+ q=await call('/api/checkout/quote','POST',payload,'member');assert.equal(q.data.shippingFee,600);assert.equal(q.data.total,120600);
+ assert.equal((await call('/api/payments/methods?country=HK','GET',undefined,'member')).data.methods.paypal,true);
+ assert.equal((await call('/api/order','POST',{...base,shippingFee:0},'member',{'Idempotency-Key':'shipping-tamper-00001'})).status,409);
+ const stale=q.data;
+ assert.equal((await call('/api/admin/shipping','POST',{country:'HK',enabled:1,fee:700,note:'test',version:2})).status,200);
+ await assert.rejects(()=>env.DB.batch([env.DB.prepare("INSERT INTO orders(order_number,status) VALUES ('STALE-SHIPPING','pending')"),...shippingStatements(env,stale,'STALE-SHIPPING')]));assert.equal(sql.prepare("SELECT count(*) n FROM orders WHERE order_number='STALE-SHIPPING'").get().n,0);
+ sql.exec("INSERT INTO promotions(code,kind,amount,minimum,maximum,scope,target,starts,ends,quota,active) VALUES ('SHIP100','fixed',100,1,100,'all','','2020-01-01','2099-01-01',10,1)");
+ q=await call('/api/checkout/quote','POST',{...payload,coupon:'SHIP100'},'member');assert.equal(q.data.subtotal,120000);assert.equal(q.data.discount,100);assert.equal(q.data.total,120600);assert.equal(q.data.shippingFee,700);
+ const created=await call('/api/order','POST',{...base,coupon:'SHIP100',expectedTotal:q.data.total},'member',{'Idempotency-Key':'shipping-success-001'});assert.equal(created.status,200,JSON.stringify(created.data));
+ const snap=sql.prepare('SELECT * FROM order_shipping WHERE order_number=?').get(created.data.orderNumber);assert.equal(snap.fee,700);
+ await call('/api/admin/shipping','POST',{country:'HK',enabled:0,fee:900,note:'test',version:3});assert.equal(sql.prepare('SELECT fee FROM order_shipping WHERE order_number=?').get(created.data.orderNumber).fee,700);
+ assert.equal((await call('/api/payments/methods?country=FR','GET',undefined,'member')).data.methods.paypal,false);
+ await assert.rejects(()=>shippingQuote(env,{items:[{category:'ink'}],total:100},'HK'),/墨水/);
+ sql.close();
 });

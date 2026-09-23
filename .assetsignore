@@ -35,3 +35,5 @@ modules.js
 homepage-store.js
 content-store.js
 first-purchase.js
+
+shipping.js

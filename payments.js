@@ -1,11 +1,13 @@
+import {COUNTRY_CODES} from './countries.js';
 import {lockPayment,settlePayment} from './inventory.js';
 import {createHmac} from 'node:crypto';
 import {sandbox} from './ecpay.js';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 const origin='https://wugong-test.wugong-pen.workers.dev';
+// Provider capability only; checkout additionally requires an enabled shipping region.
 export function methods(env,country){
  const test=env.APP_ENV==='staging';
- return {ecpay:false,bank:test&&country==='TW'&&!!bankConfig(env),linepay:false,paypal:test&&['JP','KR','US','SG'].includes(country)&&!!(env.PAYPAL_SANDBOX_CLIENT_ID&&env.PAYPAL_SANDBOX_CLIENT_SECRET)};
+ return {ecpay:false,bank:test&&country==='TW'&&!!bankConfig(env),linepay:false,paypal:test&&country!=='TW'&&COUNTRY_CODES.includes(country)&&!!(env.PAYPAL_SANDBOX_CLIENT_ID&&env.PAYPAL_SANDBOX_CLIENT_SECRET)};
 }
 export function bankConfig(env){
  try{const b=JSON.parse(env.BANK_TEST_CONFIG||'null');return b&&['bank','code','branch','holder','account'].every(k=>typeof b[k]==='string'&&b[k].trim())&&Number.isInteger(b.days)&&b.days>=1&&b.days<=30?b:null;}catch{return null;}

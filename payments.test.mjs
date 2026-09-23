@@ -4,7 +4,7 @@ import {methods,bankConfig,lineSignature,parseLine,validRedirect,paypalPaid,payp
 import {createHmac} from 'node:crypto';
 test('payment availability fails closed and follows delivery country',()=>{
  const env={APP_ENV:'staging',LINEPAY_SANDBOX_CHANNEL_ID:'id',LINEPAY_SANDBOX_CHANNEL_SECRET:'secret',PAYPAL_SANDBOX_CLIENT_ID:'id',PAYPAL_SANDBOX_CLIENT_SECRET:'secret'};
- assert.equal(methods(env,'TW').paypal,false);assert.equal(methods(env,'JP').linepay,false);assert.equal(methods(env,'JP').paypal,true);assert.equal(methods(env,'FR').paypal,false);assert.equal(methods({...env,APP_ENV:'production'},'TW').linepay,false);assert.equal(methods({},'TW').bank,false);
+ assert.equal(methods(env,'TW').paypal,false);assert.equal(methods(env,'JP').linepay,false);assert.equal(methods(env,'JP').paypal,true);assert.equal(methods(env,'FR').paypal,true);assert.equal(methods(env,'HK').paypal,true);assert.equal(methods(env,'XX').paypal,false);assert.equal(methods({...env,APP_ENV:'production'},'TW').linepay,false);assert.equal(methods({},'TW').bank,false);
 });
 test('LINE signature includes exact JSON and large transaction IDs remain exact',()=>{
  assert.equal(lineSignature('s','/path','{}','n'),createHmac('sha256','s').update('s/path{}n').digest('base64'));
