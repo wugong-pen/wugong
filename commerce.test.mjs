@@ -316,19 +316,20 @@ test('legacy phone history is indexed and safe cancellation cannot release uncer
 
 test('shipping settings require admin, confirmed fees, version checks and an atomic audit',async()=>{
  const {sql,call}=setup();
- const rows=(await call('/api/admin/shipping')).data.regions;assert.equal(rows.length,6);assert.equal(rows.find(r=>r.country==='US').fee,null);
- assert.deepEqual((await call('/api/shipping','GET',undefined,'')).data.regions,[{country:'TW',fee:0}]);
- const jp={country:'JP',enabled:1,fee:800,note:'test only',version:1};
+ const rows=(await call('/api/admin/shipping')).data.regions;assert.equal(rows.length,6);assert.equal(rows.find(r=>r.country==='US').fee,1600);
+ assert.deepEqual((await call('/api/shipping','GET',undefined,'')).data.regions,[{country:'HK',fee:500},{country:'JP',fee:500},{country:'KR',fee:700},{country:'SG',fee:750},{country:'TW',fee:0},{country:'US',fee:1600}]);
+ const jp={country:'JP',enabled:1,fee:800,note:'test only',version:2};
  for(const role of ['','member'])assert.equal((await call('/api/admin/shipping','POST',jp,role)).status,403);
  assert.equal((await call('/api/admin/shipping','POST',jp,'admin',{Origin:'https://evil.test'})).status,403);
  for(const invalid of [{fee:null},{fee:-1},{fee:1.5},{fee:'800'},{country:'XX'},{enabled:2}])assert.equal((await call('/api/admin/shipping','POST',{...jp,...invalid})).status,400);
  assert.equal((await call('/api/admin/shipping','POST',jp)).status,200);assert.equal((await call('/api/admin/shipping','POST',jp)).status,409);
  const publicRows=(await call('/api/shipping','GET',undefined,'')).data.regions;assert.ok(publicRows.some(r=>r.country==='JP'));assert.ok(publicRows.every(r=>!('note' in r)));
  sql.exec("CREATE TRIGGER fail_shipping_audit BEFORE INSERT ON commerce_audit WHEN NEW.action='shipping.update' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");
- assert.equal((await call('/api/admin/shipping','POST',{...jp,fee:999,version:2})).status,500);assert.equal(sql.prepare("SELECT fee FROM shipping_regions WHERE country='JP'").get().fee,800);sql.close();
+ assert.equal((await call('/api/admin/shipping','POST',{...jp,fee:999,version:3})).status,500);assert.equal(sql.prepare("SELECT fee FROM shipping_regions WHERE country='JP'").get().fee,800);sql.close();
 });
 test('shipping fees are server calculated after discounts; disabled routes and stale quotes fail closed',async()=>{
  const {sql,env,call}=setup();env.PAYPAL_SANDBOX_CLIENT_ID='test';env.PAYPAL_SANDBOX_CLIENT_SECRET='test';
+ await call('/api/admin/shipping');sql.exec("UPDATE shipping_regions SET enabled=0,fee=NULL,version=1 WHERE country='HK'");
  const items=[{id:'product-fuji',nib:'WUGONG 筆尖',quantity:1}],payload={items,country:'HK',phone:'+852 21234567'};
  let q=await call('/api/checkout/quote','POST',payload,'member');assert.equal(q.data.shippingReady,false);assert.equal(q.data.shippingFee,null);
  assert.equal((await call('/api/payments/methods?country=HK','GET',undefined,'member')).data.methods.paypal,false);
@@ -349,4 +350,15 @@ test('shipping fees are server calculated after discounts; disabled routes and s
  assert.equal((await call('/api/payments/methods?country=FR','GET',undefined,'member')).data.methods.paypal,false);
  await assert.rejects(()=>shippingQuote(env,{items:[{category:'ink'}],total:100},'HK'),/墨水/);
  sql.close();
+});
+
+test('owner confirmed rates apply once and preserve later administrator changes',async()=>{
+ const {sql,call}=setup();const items=[{id:'product-fuji',nib:'WUGONG 筆尖',quantity:1}];
+ for(const [country,fee]of [['JP',500],['KR',700],['SG',750],['HK',500],['US',1600]]){
+  const q=await call('/api/checkout/quote','POST',{items,country},'member');assert.equal(q.status,200);assert.equal(q.data.shippingFee,fee);assert.equal(q.data.total,120000+fee);assert.equal(q.data.shippingReady,true);assert.notEqual(q.data.firstGift?.kind,'ink');
+ }
+ assert.equal(sql.prepare("SELECT count(*) n FROM commerce_audit WHERE actor='owner-confirmed-deployment'").get().n,5);
+ assert.equal((await call('/api/admin/shipping','POST',{country:'US',fee:1900,enabled:0,note:'later setting',version:2})).status,200);
+ await call('/api/shipping','GET',undefined,'');const row=sql.prepare("SELECT * FROM shipping_regions WHERE country='US'").get();assert.equal(row.fee,1900);assert.equal(row.enabled,0);assert.equal(row.version,3);
+ assert.equal(sql.prepare("SELECT count(*) n FROM commerce_audit WHERE actor='owner-confirmed-deployment'").get().n,5);sql.close();
 });

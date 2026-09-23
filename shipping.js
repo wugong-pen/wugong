@@ -4,6 +4,18 @@ export async function shippingSchema(env){
  await env.DB.prepare('CREATE TABLE IF NOT EXISTS shipping_regions(country TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0, fee INTEGER, note TEXT NOT NULL DEFAULT \'\', version INTEGER NOT NULL DEFAULT 1)').run();
  await env.DB.prepare('CREATE TABLE IF NOT EXISTS order_shipping(order_number TEXT PRIMARY KEY,country TEXT NOT NULL,fee INTEGER NOT NULL,version INTEGER NOT NULL)').run();
  await env.DB.batch(['TW','JP','KR','US','SG','HK'].map(c=>env.DB.prepare('INSERT OR IGNORE INTO shipping_regions(country,enabled,fee,note) VALUES (?,?,?,?)').bind(c,c==='TW'?1:0,c==='TW'?0:null,c==='US'?'歷史成本參考：包裹 24.3 × 15.2 × 10.25 cm，0.7 kg，運費 NT$1,544；物流、保險及關稅待確認。此數字不是對客收費。':'')));
+ // Apply the owner's confirmed rates once, preserving later administrator changes.
+ await env.DB.prepare('CREATE TABLE IF NOT EXISTS shipping_migrations(id TEXT PRIMARY KEY)').run();
+ const migration='owner-confirmed-rates-20260923';
+ if(!await env.DB.prepare('SELECT 1 FROM shipping_migrations WHERE id=?').bind(migration).first()){
+  const statements=[];
+  for(const [country,fee] of [['JP',500],['KR',700],['SG',750],['HK',500],['US',1600]]){
+   statements.push(env.DB.prepare("INSERT INTO commerce_audit SELECT ?,?,?,?,json_object('enabled',enabled,'fee',fee,'version',version),?,?,? FROM shipping_regions WHERE country=? AND NOT EXISTS(SELECT 1 FROM shipping_migrations WHERE id=?)").bind(crypto.randomUUID(),'owner-confirmed-deployment','shipping.update',country,JSON.stringify({enabled:1,fee}),'店主確認海外配送費率',new Date().toISOString(),country,migration));
+   statements.push(env.DB.prepare('UPDATE shipping_regions SET enabled=1,fee=?,version=version+1 WHERE country=? AND NOT EXISTS(SELECT 1 FROM shipping_migrations WHERE id=?)').bind(fee,country,migration));
+  }
+  statements.push(env.DB.prepare('INSERT OR IGNORE INTO shipping_migrations VALUES (?)').bind(migration));
+  await env.DB.batch(statements);
+ }
 }
 export async function shippingRegions(env,admin=false){await shippingSchema(env);const rows=(await env.DB.prepare('SELECT * FROM shipping_regions ORDER BY country').all()).results;return admin?rows:rows.filter(r=>r.enabled).map(({country,fee})=>({country,fee}));}
 export async function shippingQuote(env,q,country,required=false){
