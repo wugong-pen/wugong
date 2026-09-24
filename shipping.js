@@ -1,4 +1,5 @@
 import {COUNTRY_CODES} from './countries.js';
+export const TW_FREE_SHIPPING_MINIMUM=3000;
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 export async function shippingSchema(env){
  await env.DB.prepare('CREATE TABLE IF NOT EXISTS shipping_regions(country TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0, fee INTEGER, note TEXT NOT NULL DEFAULT \'\', version INTEGER NOT NULL DEFAULT 1)').run();
@@ -16,20 +17,27 @@ export async function shippingSchema(env){
   statements.push(env.DB.prepare('INSERT OR IGNORE INTO shipping_migrations VALUES (?)').bind(migration));
   await env.DB.batch(statements);
  }
+ const domesticMigration='owner-tw-shipping-20260924';
+ if(!await env.DB.prepare('SELECT 1 FROM shipping_migrations WHERE id=?').bind(domesticMigration).first())await env.DB.batch([
+  env.DB.prepare("INSERT INTO commerce_audit SELECT ?,?,?,?,json_object('enabled',enabled,'fee',fee,'version',version),?,?,? FROM shipping_regions WHERE country='TW' AND NOT EXISTS(SELECT 1 FROM shipping_migrations WHERE id=?)").bind(crypto.randomUUID(),'owner-confirmed-deployment','shipping.update','TW',JSON.stringify({enabled:1,fee:60,freeOver:TW_FREE_SHIPPING_MINIMUM}),'店主確認台灣運費與滿額免運',new Date().toISOString(),domesticMigration),
+  env.DB.prepare("UPDATE shipping_regions SET enabled=1,fee=60,version=version+1 WHERE country='TW' AND NOT EXISTS(SELECT 1 FROM shipping_migrations WHERE id=?)").bind(domesticMigration),
+  env.DB.prepare('INSERT OR IGNORE INTO shipping_migrations VALUES (?)').bind(domesticMigration)
+ ]);
 }
-export async function shippingRegions(env,admin=false){await shippingSchema(env);const rows=(await env.DB.prepare('SELECT * FROM shipping_regions ORDER BY country').all()).results;return admin?rows:rows.filter(r=>r.enabled).map(({country,fee})=>({country,fee}));}
+export async function shippingRegions(env,admin=false){await shippingSchema(env);const rows=(await env.DB.prepare('SELECT * FROM shipping_regions ORDER BY country').all()).results;return admin?rows:rows.filter(r=>r.enabled).map(({country,fee})=>({country,fee,...(country==='TW'?{freeOver:TW_FREE_SHIPPING_MINIMUM}:{})}));}
 export async function shippingQuote(env,q,country,required=false){
  await shippingSchema(env);const row=await env.DB.prepare('SELECT * FROM shipping_regions WHERE country=?').bind(country||'').first();
  const reason=!country?'請選擇收件國家／地區':!row?.enabled?'此地區尚未開放配送':row.fee===null?'此地區運費尚未確認，請聯絡我們':'保留';
  const ready=!!row?.enabled&&Number.isSafeInteger(row.fee)&&row.fee>=0;
  if(required&&!ready)fail(400,reason);
  if(country&&country!=='TW'&&(q.items.some(i=>i.category==='ink')||q.coupon?.kind==='gift'&&q.coupon.gift_kind==='ink'))fail(400,'墨水（含贈品）僅寄送台灣，請移除墨水商品或更換優惠券後再結帳');
- q.shippingFee=ready?row.fee:null;q.shippingReady=ready;q.shippingMessage=ready?'':reason;q.shippingVersion=row?.version||0;q.shippingCountry=country||'';
- if(ready)q.total+=row.fee;
+ q.shippingBaseFee=row?.fee??null;q.shippingFreeOver=country==='TW'?TW_FREE_SHIPPING_MINIMUM:null;
+ q.shippingFee=ready?(country==='TW'&&q.total>=TW_FREE_SHIPPING_MINIMUM?0:row.fee):null;q.shippingReady=ready;q.shippingMessage=ready?'':reason;q.shippingVersion=row?.version||0;q.shippingCountry=country||'';
+ if(ready)q.total+=q.shippingFee;
  return q;
 }
 export function shippingStatements(env,q,order){return [
- env.DB.prepare('INSERT INTO catalog_checks(ok) SELECT CASE WHEN EXISTS(SELECT 1 FROM shipping_regions WHERE country=? AND enabled=1 AND fee=? AND version=?) THEN 1 ELSE 0 END').bind(q.shippingCountry,q.shippingFee,q.shippingVersion),
+ env.DB.prepare('INSERT INTO catalog_checks(ok) SELECT CASE WHEN EXISTS(SELECT 1 FROM shipping_regions WHERE country=? AND enabled=1 AND fee=? AND version=?) THEN 1 ELSE 0 END').bind(q.shippingCountry,q.shippingBaseFee,q.shippingVersion),
  env.DB.prepare('INSERT INTO order_shipping VALUES (?,?,?,?)').bind(order,q.shippingCountry,q.shippingFee,q.shippingVersion)
 ];}
 export async function manageShipping(request,env,url,m,body){

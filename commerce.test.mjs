@@ -317,7 +317,7 @@ test('legacy phone history is indexed and safe cancellation cannot release uncer
 test('shipping settings require admin, confirmed fees, version checks and an atomic audit',async()=>{
  const {sql,call}=setup();
  const rows=(await call('/api/admin/shipping')).data.regions;assert.equal(rows.length,6);assert.equal(rows.find(r=>r.country==='US').fee,1600);
- assert.deepEqual((await call('/api/shipping','GET',undefined,'')).data.regions,[{country:'HK',fee:500},{country:'JP',fee:500},{country:'KR',fee:700},{country:'SG',fee:750},{country:'TW',fee:0},{country:'US',fee:1600}]);
+ assert.deepEqual((await call('/api/shipping','GET',undefined,'')).data.regions,[{country:'HK',fee:500},{country:'JP',fee:500},{country:'KR',fee:700},{country:'SG',fee:750},{country:'TW',fee:60,freeOver:3000},{country:'US',fee:1600}]);
  const jp={country:'JP',enabled:1,fee:800,note:'test only',version:2};
  for(const role of ['','member'])assert.equal((await call('/api/admin/shipping','POST',jp,role)).status,403);
  assert.equal((await call('/api/admin/shipping','POST',jp,'admin',{Origin:'https://evil.test'})).status,403);
@@ -357,8 +357,22 @@ test('owner confirmed rates apply once and preserve later administrator changes'
  for(const [country,fee]of [['JP',500],['KR',700],['SG',750],['HK',500],['US',1600]]){
   const q=await call('/api/checkout/quote','POST',{items,country},'member');assert.equal(q.status,200);assert.equal(q.data.shippingFee,fee);assert.equal(q.data.total,120000+fee);assert.equal(q.data.shippingReady,true);assert.notEqual(q.data.firstGift?.kind,'ink');
  }
- assert.equal(sql.prepare("SELECT count(*) n FROM commerce_audit WHERE actor='owner-confirmed-deployment'").get().n,5);
+ assert.equal(sql.prepare("SELECT count(*) n FROM commerce_audit WHERE actor='owner-confirmed-deployment'").get().n,6);
  assert.equal((await call('/api/admin/shipping','POST',{country:'US',fee:1900,enabled:0,note:'later setting',version:2})).status,200);
  await call('/api/shipping','GET',undefined,'');const row=sql.prepare("SELECT * FROM shipping_regions WHERE country='US'").get();assert.equal(row.fee,1900);assert.equal(row.enabled,0);assert.equal(row.version,3);
- assert.equal(sql.prepare("SELECT count(*) n FROM commerce_audit WHERE actor='owner-confirmed-deployment'").get().n,5);sql.close();
+ assert.equal(sql.prepare("SELECT count(*) n FROM commerce_audit WHERE actor='owner-confirmed-deployment'").get().n,6);sql.close();
+});
+
+test('Taiwan shipping threshold uses discounted merchandise only and snapshots free shipping',async()=>{
+ const {sql,call}=setup(),items=[{id:'product-fuji',nib:'WUGONG 筆尖',quantity:1}];
+ for(const [price,fee,total]of [[2999,60,3059],[3000,0,3000],[3001,0,3001]]){
+  sql.prepare("UPDATE products SET price=? WHERE sku='product-fuji'").run(price);
+  const q=await call('/api/checkout/quote','POST',{items,country:'TW'},'member');assert.equal(q.status,200);assert.equal(q.data.shippingFee,fee);assert.equal(q.data.total,total);
+ }
+ sql.prepare("UPDATE products SET price=3000 WHERE sku='product-fuji'").run();
+ const created=await call('/api/order','POST',{items,customer:{country:'TW',name:'顧客',phone:'0912345678',address:'地址'},payment:'bank',expectedTotal:3000},'member',{'Idempotency-Key':'tw-free-shipping-001'});assert.equal(created.status,200,JSON.stringify(created.data));assert.equal(sql.prepare('SELECT fee FROM order_shipping WHERE order_number=?').get(created.data.orderNumber).fee,0);
+ sql.exec("INSERT INTO promotions(code,kind,amount,minimum,maximum,scope,target,starts,ends,quota,active) VALUES ('TW100','fixed',100,1,100,'all','','2020-01-01','2099-01-01',10,1)");
+ const discounted=await call('/api/checkout/quote','POST',{items,country:'TW',coupon:'TW100'},'member');assert.equal(discounted.data.subtotal,3000);assert.equal(discounted.data.shippingFee,60);assert.equal(discounted.data.total,2960);
+ const foreign=await call('/api/checkout/quote','POST',{items,country:'JP'},'member');assert.equal(foreign.data.shippingFee,500);assert.equal(foreign.data.total,3500);
+ const stale=await call('/api/order','POST',{items,customer:{country:'TW',name:'顧客',phone:'0912345678',address:'地址'},payment:'bank',coupon:'TW100',expectedTotal:2900},'member',{'Idempotency-Key':'tw-free-tampered-001'});assert.equal(stale.status,409);sql.close();
 });

@@ -16,6 +16,6 @@ export async function init({api,node,message}){
   const save=node('button','儲存設定');save.type='submit';f.append(save);editor.append(f);
   f.onsubmit=async e=>{e.preventDefault();save.disabled=true;try{await api('/api/admin/shipping','POST',{country:country.value,enabled:enabled.checked?1:0,fee:fee.value.trim()===''?null:Number(fee.value),note:note.value,version:r.version});editor.replaceChildren();await load();message('配送設定已儲存。');}catch(e){message(e.message);}finally{save.disabled=false;}};
  }
- async function load(){const d=await api('/api/admin/shipping');view.replaceChildren(node('p','只有已開放並確認運費的地區能結帳。會員註冊國家不受此設定限制。運費在商品折扣後另計，既有訂單金額不受修改影響。'),button('新增配送地區',()=>edit()));for(const r of d.regions){const c=node('section');c.className='manage-form';c.append(node('h2',r.country==='TW'?'台灣':names.of(r.country)),node('p',(r.enabled?'已開放':'未開放')+' · '+(r.fee===null?'運費待確認':'每筆 NT$'+r.fee.toLocaleString())),node('p',r.note),button('編輯',()=>edit(r)));view.append(c);}}
+ async function load(){const d=await api('/api/admin/shipping');view.replaceChildren(node('p','只有已開放並確認運費的地區能結帳。會員註冊國家不受此設定限制。台灣商品折扣後滿 NT$3,000 免運。運費在商品折扣後另計，既有訂單金額不受修改影響。'),button('新增配送地區',()=>edit()));for(const r of d.regions){const c=node('section');c.className='manage-form';c.append(node('h2',r.country==='TW'?'台灣':names.of(r.country)),node('p',(r.enabled?'已開放':'未開放')+' · '+(r.fee===null?'運費待確認':'每筆 NT$'+r.fee.toLocaleString())),node('p',r.note),button('編輯',()=>edit(r)));view.append(c);}}
  await load();return true;
 }
