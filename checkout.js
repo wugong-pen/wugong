@@ -42,6 +42,7 @@ async function updateMethods(){
  const inputs=[...document.querySelectorAll('input[name=payment]')];
  for(const input of inputs){input.disabled=!data.methods[input.value];if(input.disabled)input.checked=false;}
  if(!inputs.some(i=>i.checked)) {const first=inputs.find(i=>!i.disabled);if(first)first.checked=true;}
+ $('submitOrder').textContent=country!=='TW'?'送出訂單，等待帳單確認':'送出訂單';
  $('submitOrder').disabled=busy||!shippingReady||!inputs.some(i=>i.checked);
  if(!shippingReady)show('請確認收件地區及運費。');else if(!inputs.some(i=>i.checked))show('此收件國家的付款方式尚未設定完成。');
 }
@@ -50,6 +51,7 @@ async function refreshFirstGift(){if(pendingOrder)return;const seq=++quoteSequen
 $('country').addEventListener('change',refreshFirstGift);
 $('phone').addEventListener('change',refreshFirstGift);
 async function startPayment(orderNumber){
+ if(pendingPayment==='paypal_invoice'){localStorage.removeItem('wugongCart');location.assign('/member.html');return;}
  if(pendingPayment!=='ecpay'){
   const r=await fetch('/api/payments/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({orderNumber})});const data=await r.json();
   if(!r.ok||!data.success)throw new Error(data.error||'無法開始付款');

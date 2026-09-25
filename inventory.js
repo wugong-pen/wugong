@@ -1,7 +1,7 @@
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 export async function expireReservations(env){
  const stamp=new Date().toISOString();
- const eligible="expires_at<=? AND (state='held' OR (state='paying' AND EXISTS(SELECT 1 FROM orders o WHERE o.order_number=checkout_reservations.order_number AND o.payment='bank') AND NOT EXISTS(SELECT 1 FROM payment_attempts p WHERE p.order_number=checkout_reservations.order_number AND p.reported_at IS NOT NULL)))";
+ const eligible="NOT EXISTS(SELECT 1 FROM orders o WHERE o.order_number=checkout_reservations.order_number AND o.payment='paypal_invoice') AND expires_at<=? AND (state='held' OR (state='paying' AND EXISTS(SELECT 1 FROM orders o WHERE o.order_number=checkout_reservations.order_number AND o.payment='bank') AND NOT EXISTS(SELECT 1 FROM payment_attempts p WHERE p.order_number=checkout_reservations.order_number AND p.reported_at IS NOT NULL)))";
  // Once online payment starts, an uncertain provider result must retain stock.
  await env.DB.batch([
   env.DB.prepare(`UPDATE inventory SET available=available+COALESCE((SELECT SUM(quantity) FROM checkout_lines WHERE sku=inventory.sku AND order_number IN (SELECT order_number FROM checkout_reservations WHERE ${eligible})),0)`).bind(stamp),

@@ -5,7 +5,7 @@ if(document.body.dataset.page!=='login'){
  for(const [label,url] of [['首頁編輯','/admin-manage.html?section=homepage'],['網誌圖文','/admin-manage.html?section=blog'],['獲獎紀錄','/admin-manage.html?section=awards'],['活動花絮','/admin-manage.html?section=events'],['媒體採訪','/admin-manage.html?section=media'],['訂單管理','/admin-orders.html'],['商品管理','/admin-manage.html?section=products'],['筆款庫存／影片','/admin-manage.html?section=stock'],['尖型管理','/admin-manage.html?section=nibs'],['品牌／商品分類','/admin-manage.html?section=categories'],['配送國家／運費','/admin-manage.html?section=shipping'],['優惠券','/admin-manage.html?section=coupons'],['會員管理','/admin-manage.html?section=members'],['操作紀錄','/admin-manage.html?section=audit'],['查看商店','/shop.html']]){const a=document.createElement('a');a.textContent=label;a.href=url;if((url.includes(location.search)&&url.includes('admin-manage')&&location.pathname.includes('admin-manage'))||(!location.search&&url.includes('admin-orders')&&location.pathname.includes('admin-orders')))a.setAttribute('aria-current','page');nav.append(a);}document.querySelector('header').after(nav);
 }
 const labels={pending:'待付款',confirmed:'已確認',paid:'已付款',test_paid:'模擬付款紀錄',shipped:'已出貨',completed:'已完成',cancelled:'已取消',expired:'已逾期'};
-const payments={bank:'銀行匯款',paypal:'PayPal',linepay:'LINE Pay'};
+const payments={paypal_invoice:'海外 PayPal 人工帳單',bank:'銀行匯款',paypal:'PayPal',linepay:'LINE Pay'};
 const money=n=>'NT$ '+Number(n).toLocaleString('zh-TW');
 let page=1,currentOrder;
 const message=s=>{$('message').textContent=s;};
@@ -37,9 +37,11 @@ async function loadDetail(){
   if(['paid','test_paid','shipped'].includes(o.status)){$('advance').textContent=o.status!=='shipped'?'標記為已出貨':'標記為已完成';$('advance').hidden=false;}
   message('');
   await orderManagement(o.order_number);
+  document.getElementById('manual-invoice')?.remove();
+  if(o.payment==='paypal_invoice')await (await import('./admin-invoice.js')).renderInvoice({o,api,node,reload:loadDetail,message});
   if(o.status==='pending'){
    const cancel=node('button','取消未付款訂單');cancel.id='cancel-order';cancel.type='button';$('advance').after(cancel);
-   cancel.onclick=()=>{cancel.hidden=true;const panel=node('section');panel.id='cancel-confirmation';panel.className='card';panel.append(node('p','確認取消此訂單？商品保留將釋放，首購贈品資格會恢復。已回報匯款或付款確認中的訂單須先核對。'));const confirmCancel=node('button','確認取消訂單'),back=node('button','返回');confirmCancel.type=back.type='button';panel.append(confirmCancel,back);cancel.after(panel);back.onclick=()=>{panel.remove();cancel.hidden=false;};confirmCancel.onclick=async()=>{confirmCancel.disabled=back.disabled=true;try{await api('/api/admin/order/status','POST',{orderNumber:o.order_number,expectedStatus:'pending',status:'cancelled'});await loadDetail();message('訂單已取消，首購贈品資格已釋放。');}catch(e){await loadDetail();message(e.message);}};};
+   cancel.onclick=()=>{cancel.hidden=true;const panel=node('section');panel.id='cancel-confirmation';panel.className='card';panel.append(node('p','確認取消此訂單？商品保留將釋放，首購贈品資格會恢復。已回報匯款或付款確認中的訂單須先核對。'));const confirmCancel=node('button','確認取消訂單'),back=node('button','返回');confirmCancel.type=back.type='button';let invoiceCheck=null;if(o.payment==='paypal_invoice'){const label=node('label','我已在 PayPal 確認尚未收款，且未寄出帳單或已取消所有可付款帳單。');invoiceCheck=node('input');invoiceCheck.type='checkbox';label.prepend(invoiceCheck);panel.append(label);}panel.append(confirmCancel,back);cancel.after(panel);back.onclick=()=>{panel.remove();cancel.hidden=false;};confirmCancel.onclick=async()=>{if(invoiceCheck&&!invoiceCheck.checked){message('請先取消 PayPal 帳單並確認未收款。');return;}confirmCancel.disabled=back.disabled=true;try{await api('/api/admin/order/status','POST',{orderNumber:o.order_number,expectedStatus:'pending',status:'cancelled',invoiceCancelled:invoiceCheck?.checked===true});await loadDetail();message('訂單已取消，首購贈品資格已釋放。');}catch(e){await loadDetail();message(e.message);}};};
   }
  }catch(e){message(e.message);}
 }

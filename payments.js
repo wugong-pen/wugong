@@ -7,7 +7,7 @@ const origin='https://wugong-test.wugong-pen.workers.dev';
 // Provider capability only; checkout additionally requires an enabled shipping region.
 export function methods(env,country){
  const test=env.APP_ENV==='staging';
- return {ecpay:false,bank:test&&country==='TW'&&!!bankConfig(env),linepay:false,paypal:test&&country!=='TW'&&COUNTRY_CODES.includes(country)&&!!(env.PAYPAL_SANDBOX_CLIENT_ID&&env.PAYPAL_SANDBOX_CLIENT_SECRET)};
+ return {paypal_invoice:test&&country!=='TW'&&COUNTRY_CODES.includes(country),ecpay:false,bank:test&&country==='TW'&&!!bankConfig(env),linepay:false,paypal:test&&country!=='TW'&&COUNTRY_CODES.includes(country)&&!!(env.PAYPAL_SANDBOX_CLIENT_ID&&env.PAYPAL_SANDBOX_CLIENT_SECRET)};
 }
 export function bankConfig(env){
  try{const b=JSON.parse(env.BANK_TEST_CONFIG||'null');return b&&['bank','code','branch','holder','account'].every(k=>typeof b[k]==='string'&&b[k].trim())&&Number.isInteger(b.days)&&b.days>=1&&b.days<=30?b:null;}catch{return null;}
@@ -32,6 +32,7 @@ export async function start(order,env){
  sandbox(env);if(env.PAYMENT_ORIGIN!==origin)fail(503,'測試付款網址尚未設定');
  if(methods(env,order.shipping_country)[order.payment]!==true)fail(503,'此付款方式尚未設定或不適用收件國家');
  if(order.status!=='pending')fail(409,'請查看訂單付款狀態');
+ if(order.payment==='paypal_invoice')fail(409,'此訂單由管理員另寄 PayPal 帳單，請查看會員中心');
  await lockPayment(env,order.order_number);
  let p=await env.DB.prepare('SELECT * FROM payment_attempts WHERE order_number=?').bind(order.order_number).first();
  if(p){if(p.due_at&&p.due_at<=new Date().toISOString())fail(409,'匯款期限已過，請查看訂單狀態');if(p.redirect_url)return {redirect:p.redirect_url};if(p.bank_details)return {bank:JSON.parse(p.bank_details),dueAt:p.due_at};fail(409,'付款請求處理中或結果待確認，請勿重複建立付款');}

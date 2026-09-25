@@ -101,3 +101,9 @@ Deployment and owner provisioning must be verified separately; local tests alone
 
 ## 台灣運費更新（2026-09-24）
 台灣每筆 NT$60，商品折扣後金額滿 NT$3,000 免運。門檻以不含運費的商品實付金額計算，海外費率不適用此免運規則。以一次性更新套用費率，後台日後修改不會被覆寫；既有訂單金額不變。
+
+
+## Overseas manual PayPal invoices — 2026-09-25
+Overseas checkout now submits paypal_invoice orders without redirecting to PayPal. Email is taken from the signed-in member. Existing automated PayPal orders remain supported. Administrators manually send invoices outside this website, then record the invoice number and due date in order details. Invoice total must equal the immutable order total in TWD; changes require cancellation and a new order. No emails are sent by this feature.
+Stock remains held until manual reconciliation or cancellation, even past the recorded deadline. Cancel all payable PayPal invoices and verify no payment before cancelling the website order. Cancellation restores reserved inventory and gift eligibility. Manual settlement requires invoice, transaction ID, gross TWD amount and explicit reconciliation confirmation; duplicate transactions and racing writes cannot double-sell stock. The current release only records test_paid, never real paid; live activation remains a separate owner-confirmed release.
+Validation: 47 tests passed, including D1 manual-invoice ownership, stale edits, amount mismatch, concurrent settlement, duplicate transaction rollback, expiry retention and cancellation. Worker build passed.

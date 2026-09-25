@@ -1,3 +1,4 @@
+import {readInvoice,manageInvoice} from './manual-invoice.js';
 import {shippingRegions,shippingQuote,shippingStatements} from './shipping.js';
 import {firstGiftQuote,firstGiftStatements,firstSchema,giftPhone,giftNotice} from './first-purchase.js';
 import {readHomepage,manageHomepage} from './homepage-store.js';
@@ -112,6 +113,10 @@ async function adminApi(request,env,url) {
     if(method!=='GET')await rate(env,`admin-commerce:${m.id}`,120);
     const result=await manageCommerce(request,env,url,m,body);if(result!==null)return json({success:true,...result});
   }
+  if(path==='/api/admin/manual-invoice'){
+    if(method==='GET')return json({success:true,invoice:await readInvoice(env,text(url.searchParams.get('order'),60,'訂單編號'))});
+    if(method==='POST'){await rate(env,`invoice:${m.id}`,60);await manageInvoice(env,m,await body(request));return json({success:true});}
+  }
   if(path==='/api/admin/session'&&method==='GET')return json({success:true,admin:{name:m.name,email:m.email}});
   const base='SELECT o.order_number,o.customer_name,o.phone,o.email,o.address,o.shipping,o.payment,o.note,o.items,o.total,o.status,o.created_at,mo.shipping_country FROM orders o LEFT JOIN member_orders mo ON mo.order_number=o.order_number';
   if((path==='/api/admin/orders'||path==='/api/orders')&&method==='GET') {
@@ -124,16 +129,18 @@ async function adminApi(request,env,url) {
   if(path.startsWith('/api/admin/orders/')&&method==='GET') {
     let number;try{number=decodeURIComponent(path.slice('/api/admin/orders/'.length));}catch{fail(400,'訂單編號不正確');}
     const order=await env.DB.prepare(base+' WHERE o.order_number=?').bind(text(number,60,'訂單編號')).first();
-    if(!order)fail(404,'找不到此訂單');return json({success:true,order});
+    if(!order)fail(404,'找不到此訂單');return json({success:true,order:{...order,invoice:order.payment==='paypal_invoice'?await readInvoice(env,order.order_number):null}});
   }
   if((path==='/api/admin/order/status'||path==='/api/order/status')&&method==='POST') {
     await rate(env,`admin-update:${m.id}`,100);
     const data=await body(request),number=text(data.orderNumber,60,'訂單編號');
     // Payment/stock transitions belong exclusively to verified payment workflows.
-    if(!Object.keys(data).every(k=>['orderNumber','status','expectedStatus'].includes(k)))fail(400,'不支援的訂單欄位');
+    if(!Object.keys(data).every(k=>['orderNumber','status','expectedStatus','invoiceCancelled'].includes(k)))fail(400,'不支援的訂單欄位');
     const transitions={paid:'shipped',shipped:'completed',...(env.APP_ENV==='staging'?{test_paid:'shipped'}:{})};
     await firstSchema(env);
     if(data.expectedStatus==='pending'&&data.status==='cancelled'){
+      const cancelling=await env.DB.prepare('SELECT payment FROM orders WHERE order_number=?').bind(number).first();
+      if(cancelling?.payment==='paypal_invoice'&&data.invoiceCancelled!==true)fail(400,'請先確認 PayPal 未收款，且已取消所有可付款帳單');
       // Only unpaid, unreported reservations are cancellable here. Uncertain online payments retain stock.
       const id=crypto.randomUUID(),eligible="SELECT 1 FROM orders o JOIN checkout_reservations r ON r.order_number=o.order_number WHERE o.order_number=? AND o.status='pending' AND (r.state='held' OR (r.state='paying' AND o.payment='bank')) AND NOT EXISTS(SELECT 1 FROM payment_receipts p WHERE p.order_number=o.order_number) AND NOT EXISTS(SELECT 1 FROM payment_attempts p WHERE p.order_number=o.order_number AND p.reported_at IS NOT NULL)";
       const owns='EXISTS(SELECT 1 FROM admin_audit WHERE id=?)';
@@ -265,11 +272,11 @@ async function api(request,env,url,ctx) {
     const base='SELECT o.order_number,o.customer_name,o.phone,o.email,o.address,o.shipping,o.payment,o.note,o.items,o.total,o.status,o.created_at,mo.shipping_country,(SELECT state FROM checkout_reservations WHERE order_number=o.order_number) AS reservation_state,(SELECT expires_at FROM checkout_reservations WHERE order_number=o.order_number) AS reserved_until FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE mo.member_id=?';
     if(path!=='/api/member/orders') {
       const order=await env.DB.prepare(base+' AND o.order_number=?').bind(m.id,decodeURIComponent(path.slice('/api/member/orders/'.length))).first();
-      if(!order)fail(404,'找不到此訂單');return json({success:true,order});
+      if(!order)fail(404,'找不到此訂單');return json({success:true,order:{...order,invoice:order.payment==='paypal_invoice'?await readInvoice(env,order.order_number):null}});
     }
     const page=Math.floor(Math.max(1,Math.min(100000,Number(url.searchParams.get('page'))||1)));
     const result=await env.DB.prepare(base+' ORDER BY o.id DESC LIMIT 21 OFFSET ?').bind(m.id,(page-1)*20).all();
-    return json({success:true,orders:result.results.slice(0,20),hasMore:result.results.length>20});
+    return json({success:true,orders:await Promise.all(result.results.slice(0,20).map(async o=>({...o,invoice:o.payment==='paypal_invoice'?await readInvoice(env,o.order_number):null}))),hasMore:result.results.length>20});
   }
   if(path==='/api/shipping'&&method==='GET')return json({success:true,regions:await shippingRegions(env)});
   if(path==='/api/payments/methods'&&method==='GET'){await session(request,env);const country=url.searchParams.get('country'),regions=await shippingRegions(env);return json({success:true,methods:regions.some(r=>r.country===country&&r.fee!==null)?methods(env,country):{ecpay:false,bank:false,linepay:false,paypal:false}});}

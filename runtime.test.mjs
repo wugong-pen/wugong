@@ -9,7 +9,7 @@ import {firstGiftQuote,firstGiftStatements,firstGiftForOrder} from './first-purc
 const require=createRequire(import.meta.url);
 const {Miniflare,convertV4MiniflareOptions}=require(require.resolve('miniflare',{paths:[require.resolve('wrangler')]}));
 test('Cloudflare runtime supports password hashing and D1 membership',async()=>{
- const mf=new Miniflare(convertV4MiniflareOptions({modules:[{type:'ESModule',path:fileURLToPath(new URL('./worker.js',import.meta.url)),contents:readFileSync(new URL('./worker.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./first-purchase.js',import.meta.url)),contents:readFileSync(new URL('./first-purchase.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./countries.js',import.meta.url)),contents:readFileSync(new URL('./countries.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./ecpay.js',import.meta.url)),contents:readFileSync(new URL('./ecpay.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./payments.js',import.meta.url)),contents:readFileSync(new URL('./payments.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./inventory.js',import.meta.url)),contents:readFileSync(new URL('./inventory.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./commerce.js',import.meta.url)),contents:readFileSync(new URL('./commerce.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./modules.js',import.meta.url)),contents:readFileSync(new URL('./modules.js',import.meta.url),'utf8')},...['shipping.js','homepage-store.js','homepage-config.js','content-store.js','content-model.js'].map(f=>({type:'ESModule',path:fileURLToPath(new URL(f,import.meta.url)),contents:readFileSync(new URL(f,import.meta.url),'utf8')}))],compatibilityDate:'2026-09-07',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],bindings:{APP_ENV:'staging',PAYMENT_ORIGIN:'https://wugong-test.wugong-pen.workers.dev',BANK_TEST_CONFIG:JSON.stringify({bank:'測試銀行',code:'TEST',branch:'測試分行',holder:'測試戶名',account:'TEST-NOT-A-REAL-ACCOUNT',days:3})}}));
+ const mf=new Miniflare(convertV4MiniflareOptions({modules:[{type:'ESModule',path:fileURLToPath(new URL('./worker.js',import.meta.url)),contents:readFileSync(new URL('./worker.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./first-purchase.js',import.meta.url)),contents:readFileSync(new URL('./first-purchase.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./countries.js',import.meta.url)),contents:readFileSync(new URL('./countries.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./ecpay.js',import.meta.url)),contents:readFileSync(new URL('./ecpay.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./payments.js',import.meta.url)),contents:readFileSync(new URL('./payments.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./inventory.js',import.meta.url)),contents:readFileSync(new URL('./inventory.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./commerce.js',import.meta.url)),contents:readFileSync(new URL('./commerce.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./modules.js',import.meta.url)),contents:readFileSync(new URL('./modules.js',import.meta.url),'utf8')},...['manual-invoice.js','shipping.js','homepage-store.js','homepage-config.js','content-store.js','content-model.js'].map(f=>({type:'ESModule',path:fileURLToPath(new URL(f,import.meta.url)),contents:readFileSync(new URL(f,import.meta.url),'utf8')}))],compatibilityDate:'2026-09-07',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],bindings:{APP_ENV:'staging',PAYMENT_ORIGIN:'https://wugong-test.wugong-pen.workers.dev',BANK_TEST_CONFIG:JSON.stringify({bank:'測試銀行',code:'TEST',branch:'測試分行',holder:'測試戶名',account:'TEST-NOT-A-REAL-ACCOUNT',days:3})}}));
  try{
   const db=await mf.getD1Database('DB');
   const schema=readFileSync(new URL('./schema-members.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'');
@@ -113,6 +113,38 @@ test('Cloudflare runtime supports password hashing and D1 membership',async()=>{
   await db.prepare("UPDATE shipping_regions SET version=version+1,fee=1800 WHERE country='US'").run();
   await assert.rejects(()=>db.batch([db.prepare("INSERT INTO orders(order_number,status) VALUES ('STALE-FREIGHT','pending')"),...shippingStatements({DB:db},shipping,'STALE-FREIGHT')]));
   assert.equal(await db.prepare("SELECT 1 FROM orders WHERE order_number='STALE-FREIGHT'").first(),null);
+
+  // Manual invoice orders reserve stock until an administrator reconciles or cancels them.
+  await db.prepare("UPDATE inventory SET available=10 WHERE sku='body-product-fuji'").run();
+  const manualPayload={...payload,customer:{...payload.customer,country:'US',phone:'12025550119'},payment:'paypal_invoice',items:[{id:'product-fuji',nib:'WUGONG 筆尖',quantity:1}],expectedTotal:121800};
+  const makeManual=key=>post('/api/order',manualPayload,{...headers,'Idempotency-Key':key});
+  const manual=await makeManual('manual-invoice-order-1');assert.equal(manual.status,200,JSON.stringify(manual));
+  const num=manual.orderNumber;
+  assert.equal((await post('/api/payments/start',{orderNumber:num})).status,409);
+  await db.prepare("UPDATE checkout_reservations SET expires_at='2000-01-01' WHERE order_number=?").bind(num).run();
+  const visible=await (await mf.dispatchFetch('https://shop.test/api/member/orders/'+num,{headers:{Cookie:cookie}})).json();
+  assert.equal(visible.order.status,'pending');assert.equal(visible.order.reservation_state,'held');
+  const inv={orderNumber:num,version:0,action:'sent',invoiceNumber:'TEST-INVOICE-1',dueDate:'2026-12-31',confirmed:true};
+  assert.equal((await post('/api/admin/manual-invoice',inv,headers)).status,403);
+  assert.equal((await post('/api/admin/manual-invoice',inv,adminHeaders)).status,200);
+  assert.equal((await post('/api/admin/manual-invoice',inv,adminHeaders)).status,409);
+  const detail=await (await mf.dispatchFetch('https://shop.test/api/member/orders/'+num,{headers:{Cookie:cookie}})).json();assert.equal(detail.order.invoice.invoice_number,'TEST-INVOICE-1');
+  const paid={orderNumber:num,version:1,action:'paid',transactionId:'TEST-TRANSACTION-1',amount:121800,currency:'TWD',confirmed:true};
+  assert.equal((await post('/api/admin/manual-invoice',{...paid,amount:1},adminHeaders)).status,400);
+  const beforeSold=(await db.prepare("SELECT sold FROM inventory WHERE sku='body-product-fuji'").first()).sold;
+  const race=await Promise.all([post('/api/admin/manual-invoice',paid,adminHeaders),post('/api/admin/manual-invoice',paid,adminHeaders)]);
+  assert.equal(race.filter(r=>r.status===200).length,1,JSON.stringify(race));
+  assert.equal((await db.prepare("SELECT sold FROM inventory WHERE sku='body-product-fuji'").first()).sold,beforeSold+1);
+  assert.equal((await db.prepare('SELECT status FROM orders WHERE order_number=?').bind(num).first()).status,'test_paid');
+  const second=await makeManual('manual-invoice-order-2');assert.equal(second.status,200,JSON.stringify(second));
+  await post('/api/admin/manual-invoice',{...inv,orderNumber:second.orderNumber,invoiceNumber:'TEST-INVOICE-2'},adminHeaders);
+  assert.notEqual((await post('/api/admin/manual-invoice',{...paid,orderNumber:second.orderNumber},adminHeaders)).status,200);
+  assert.equal((await db.prepare('SELECT state FROM checkout_reservations WHERE order_number=?').bind(second.orderNumber).first()).state,'held');
+  const available=(await db.prepare("SELECT available FROM inventory WHERE sku='body-product-fuji'").first()).available;
+  const cancelManual={orderNumber:second.orderNumber,expectedStatus:'pending',status:'cancelled'};
+  assert.equal((await post('/api/admin/order/status',cancelManual,adminHeaders)).status,400);
+  assert.equal((await post('/api/admin/order/status',{...cancelManual,invoiceCancelled:true},adminHeaders)).status,200);
+  assert.equal((await db.prepare("SELECT available FROM inventory WHERE sku='body-product-fuji'").first()).available,available+1);
  }finally{await mf.dispose();}
 });
 

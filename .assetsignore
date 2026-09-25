@@ -37,3 +37,5 @@ content-store.js
 first-purchase.js
 
 shipping.js
+
+manual-invoice.js

@@ -32,11 +32,12 @@ submit($('profileForm'),async d=>{const result=await api('/api/member','PATCH',d
 submit($('passwordForm'),async d=>{confirmPassword(d);await api('/api/member/password','POST',d);showAuth();tab(false);message('密碼已更新，請重新登入。');});
 $('logout').addEventListener('click',async()=>{try{await api('/api/member/logout','POST',{});showAuth();tab(false);message('已安全登出');}catch(e){message(e.message,true);}});
 const states={expired:'付款期限已過，庫存已釋放',test_paid:'測試付款成功（未實際收款）',payment_failed:'測試付款失敗',pending:'待確認',confirmed:'已確認',paid:'已付款',shipped:'已出貨',completed:'已完成',cancelled:'已取消'};
-const payments={ecpay:'綠界信用卡（測試）',bank:'銀行轉帳',card:'信用卡',linepay:'LINE Pay'};
+const payments={paypal_invoice:'海外 PayPal 人工帳單',ecpay:'綠界信用卡（測試）',bank:'銀行轉帳',card:'信用卡',linepay:'LINE Pay'};
 function node(tag,text,className){const el=document.createElement(tag);el.textContent=text;if(className)el.className=className;return el;}
 function orderCard(order){
   const card=node('article','','order');
-  if(order.reservation_state==='held')card.append(node('p','商品保留至 '+new Date(order.reserved_until).toLocaleString('zh-TW')+'，請於期限內開始付款。','hint'));
+  if(order.payment==='paypal_invoice'&&order.status==='pending'){card.append(node('p',order.invoice?'帳單已由管理員記錄寄出：'+order.invoice.invoice_number+'；付款期限：'+order.invoice.due_date+'。請查閱 '+order.email+' 的帳單郵件。':'訂單已收到，待確認商品與運費後，另寄 PayPal 帳單至 '+order.email+'。','hint'),node('p','目前為流程測試，請勿實際付款。訂單尚未付款；付款狀態須由管理員核對。逾期由管理員確認，不會自動釋出庫存。','hint'));}
+  if(order.reservation_state==='held'&&order.payment!=='paypal_invoice')card.append(node('p','商品保留至 '+new Date(order.reserved_until).toLocaleString('zh-TW')+'，請於期限內開始付款。','hint'));
   if(order.reservation_state==='paying')card.append(node('p',order.payment==='bank'?'匯款須於三天內完成並回報；已回報的訂單會保留庫存等待對帳。':'付款結果確認中，庫存持續保留；若已付款，系統會定期查詢結果，請勿另建訂單重複付款。','hint'));
 card.append(node('h3',order.order_number),node('span',states[order.status]||'處理中','status'));
   const date=new Date(order.created_at);card.append(node('p',Number.isFinite(date.getTime())?date.toLocaleString('zh-TW'):'','hint'));
