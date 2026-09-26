@@ -37,6 +37,7 @@ async function loadDetail(){
   if(['paid','test_paid','shipped'].includes(o.status)){$('advance').textContent=o.status!=='shipped'?'標記為已出貨':'標記為已完成';$('advance').hidden=false;}
   message('');
   await orderManagement(o.order_number);
+  await (await import('./admin-notifications.js')).renderNotifications({api,node,order:o.order_number});
   document.getElementById('manual-invoice')?.remove();
   if(o.payment==='paypal_invoice')await (await import('./admin-invoice.js')).renderInvoice({o,api,node,reload:loadDetail,message});
   if(o.status==='pending'){
@@ -53,6 +54,7 @@ if(document.body.dataset.page==='login'){
  try{const {admin}=await api('/api/admin/session');$('identity').textContent=admin.email;
   if(document.body.dataset.page==='manage'){await (await import('./admin-manage.js')).init({api,node,message});}
   else if(document.body.dataset.page==='orders'){
+   await (await import('./admin-notifications.js')).renderNotifications({api,node});
    const search=node('form');search.className='search-form';const input=node('input');input.id='order-search';input.placeholder='搜尋訂單編號、收件人或信箱';input.maxLength=100;input.setAttribute('aria-label','搜尋訂單');const select=node('select');select.id='order-status';select.setAttribute('aria-label','訂單狀態');for(const [v,label]of [['','全部狀態'],...Object.entries(labels)]){const option=node('option',label);option.value=v;select.append(option);}const submit=node('button','篩選');search.append(input,select,submit);$('message').after(search);search.onsubmit=e=>{e.preventDefault();page=1;loadOrders();};
    $('refresh').onclick=loadOrders;$('previous').onclick=()=>{page--;loadOrders();};$('next').onclick=()=>{page++;loadOrders();};await loadOrders();}
   else{$('advance').onclick=async()=>{const button=$('advance');button.disabled=true;try{await api('/api/admin/order/status','POST',{orderNumber:currentOrder.order_number,expectedStatus:currentOrder.status,status:currentOrder.status!=='shipped'?'shipped':'completed'});await loadDetail();}catch(e){await loadDetail();message(e.message);}finally{button.disabled=false;}};await loadDetail();}

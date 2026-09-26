@@ -39,3 +39,5 @@ first-purchase.js
 shipping.js
 
 manual-invoice.js
+
+order-notifications.js

@@ -1,3 +1,4 @@
+import {notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
 import {readInvoice,manageInvoice} from './manual-invoice.js';
 import {shippingRegions,shippingQuote,shippingStatements} from './shipping.js';
 import {firstGiftQuote,firstGiftStatements,firstSchema,giftPhone,giftNotice} from './first-purchase.js';
@@ -112,6 +113,10 @@ async function adminApi(request,env,url) {
   if(path.startsWith('/api/admin/')&&!['/api/admin/session','/api/admin/orders','/api/admin/order/status'].includes(path)&&!path.startsWith('/api/admin/orders/')) {
     if(method!=='GET')await rate(env,`admin-commerce:${m.id}`,120);
     const result=await manageCommerce(request,env,url,m,body);if(result!==null)return json({success:true,...result});
+  }
+  if(path==='/api/admin/order-notifications'){
+    if(method==='GET')return json({success:true,...await notificationStatus(env,url.searchParams.get('order'))});
+    if(method==='POST'){await rate(env,`notification-test:${m.id}`,3);await queueTestNotification(env);await drainNotifications(env);return json({success:true,...await notificationStatus(env)});}
   }
   if(path==='/api/admin/manual-invoice'){
     if(method==='GET')return json({success:true,invoice:await readInvoice(env,text(url.searchParams.get('order'),60,'訂單編號'))});
@@ -316,18 +321,23 @@ async function api(request,env,url,ctx) {
     const shipping=text(order.shipping??'',40,'配送方式',false),payment=text(order.payment,30,'付款方式'),note=text(order.note??'',1000,'備註',false);
     if(methods(env,c.country)[payment]!==true)fail(400,'此付款方式尚未設定或不適用收件國家');
     if(order.expectedTotal!==total)fail(409,'商品金額或運費已更新，請重新整理後確認');
+    await notificationSchema(env);
+    const createdAt=new Date().toISOString();
     try{await env.DB.batch([
       ...catalogGuards(env,items),
-      env.DB.prepare('INSERT INTO orders(order_number,customer_name,phone,email,address,shipping,payment,note,items,total,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(number,name,phone,m.email,address,shipping,payment,note+'\n配送運費：NT$'+q.shippingFee+(q.gift?'\n優惠券贈品：'+q.gift:'')+(firstGift?'\n首購贈品'+(firstGift.code?'（'+firstGift.code+'）':'')+'：'+firstGift.description+'\n'+giftNotice:''),JSON.stringify(items),total,'pending',new Date().toISOString()),
+      env.DB.prepare('INSERT INTO orders(order_number,customer_name,phone,email,address,shipping,payment,note,items,total,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(number,name,phone,m.email,address,shipping,payment,note+'\n配送運費：NT$'+q.shippingFee+(q.gift?'\n優惠券贈品：'+q.gift:'')+(firstGift?'\n首購贈品'+(firstGift.code?'（'+firstGift.code+'）':'')+'：'+firstGift.description+'\n'+giftNotice:''),JSON.stringify(items),total,'pending',createdAt),
+      notificationStatement(env,{order_number:number,created_at:createdAt,email:m.email,country:c.country,items,total,payment}),
       env.DB.prepare('INSERT INTO member_orders(order_number,member_id,shipping_country,request_key) VALUES (?,?,?,?)').bind(number,m.id,c.country,key),
       ...shippingStatements(env,q,number),...reserveStatements(env,number,items,payment),...couponStatements(env,q,m.id,number),...firstGiftStatements(env,firstGift,m.id,number,giftPhone(phone,c.country))
     ]);}catch(error){const retry=await env.DB.prepare('SELECT order_number FROM member_orders WHERE member_id=? AND request_key=?').bind(m.id,key).first();if(!retry){if(error.message?.includes('CHECK constraint failed: quantity'))fail(409,'商品庫存不足，請調整數量後再試');throw error;}return json({success:true,orderNumber:retry.order_number});}
+    const delivery=drainNotifications(env).catch(()=>console.error('Order notification delivery deferred'));
+    if(ctx?.waitUntil)ctx.waitUntil(delivery);else await delivery;
     return json({success:true,orderNumber:number});
   }
   fail(404,'找不到此功能');
 }
 export default {
-  async scheduled(event,env){if(env.APP_ENV==='staging'){await expireReservations(env);await reconcilePayments(env);}},
+  async scheduled(event,env){await drainNotifications(env);if(env.APP_ENV==='staging'){await expireReservations(env);await reconcilePayments(env);}},
   async fetch(request,env,ctx) {
     const url=new URL(request.url);
     try{
