@@ -1,3 +1,4 @@
+import {loadItemTranslations} from './i18n.js';
 import {countryOptions} from './countries.js';
 const $=id=>document.getElementById(id);
 let member=null,busy=false,expectedTotal=null,pendingOrder=null,pendingPayment=null;
@@ -7,7 +8,7 @@ const requestKey=crypto.randomUUID();
 const message=$('checkoutMessage');
 function show(value){message.textContent=value;}
 function cart(){try{return JSON.parse(localStorage.getItem('wugongCart'))||[];}catch{return[];}}
-function render(){const items=cart();$('orderItems').replaceChildren();if(!items.length){show('購物車目前沒有商品。');return;}
+function render(){const items=cart();void loadItemTranslations(items);$('orderItems').replaceChildren();if(!items.length){show('購物車目前沒有商品。');return;}
   let total=0;for(const item of items){const row=document.createElement('div');row.className='order-item';const image=document.createElement('img');image.alt='';if(/^(?:\/media\/[a-f0-9]{64}|\/?[\w.-]+\.(?:jpe?g|png|webp))$/i.test(item.image||''))image.src=item.image;const label=document.createElement('div');label.textContent=`${item.product}${item.nib?' · '+item.nib:''} × ${item.quantity}`;const cost=document.createElement('div');const value=Number(item.price)*Number(item.quantity);cost.textContent=`NT$${value.toLocaleString()}`;total+=value;row.append(image,label,cost);$('orderItems').append(row);}$('subtotal').textContent=$('total').textContent=`NT$${total.toLocaleString()}`;
 }
 

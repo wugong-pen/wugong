@@ -376,3 +376,24 @@ test('Taiwan shipping threshold uses discounted merchandise only and snapshots f
  const foreign=await call('/api/checkout/quote','POST',{items,country:'JP'},'member');assert.equal(foreign.data.shippingFee,500);assert.equal(foreign.data.total,3500);
  const stale=await call('/api/order','POST',{items,customer:{country:'TW',name:'顧客',phone:'0912345678',address:'地址'},payment:'bank',coupon:'TW100',expectedTotal:2900},'member',{'Idempotency-Key':'tw-free-tampered-001'});assert.equal(stale.status,409);sql.close();
 });
+
+test('English product fields preserve canonical checkout specs and invalidate stale copy',async()=>{
+ const {sql,env,call}=setup();
+ const p=(await call('/api/admin/products?q=product-fuji')).data.products.find(p=>p.sku==='product-fuji');
+ const english={name:'Mount Fuji',variant:'WUGONG nib',description:'A lacquer pen with 925 silver engraving.'};
+ assert.equal((await call('/api/admin/product','POST',{...p,english},'member')).status,403);
+ assert.equal((await call('/api/admin/product','POST',{...p,english})).status,200);
+ let shown=(await call('/api/catalog?sku=product-fuji','GET',undefined,'')).data.products[0];
+ assert.deepEqual(shown.english,english);assert.equal(shown.variant,p.variant);assert.equal(shown.price,p.price);
+ assert.equal((await catalogQuote(env,[{id:p.sku,nib:p.variant,quantity:1}])).total,p.price);
+ await assert.rejects(()=>catalogQuote(env,[{id:p.sku,nib:english.variant,quantity:1}]));
+ assert.equal((await call('/api/catalog?q=Mount%20Fuji','GET',undefined,'')).data.products.length,1);
+ assert.equal((await call('/api/catalog?q=Huangshan','GET',undefined,'')).data.products.length,1);
+ assert.equal((await call('/api/admin/product','POST',{...p,english:{...english,name:'Stale'}})).status,409);
+ assert.equal((await call('/api/admin/product','POST',{...p,version:p.version+1,description:'新介紹',english:undefined})).status,200);
+ shown=(await call('/api/catalog?sku=product-fuji','GET',undefined,'')).data.products[0];
+ assert.equal(shown.english.description,'');assert.equal(shown.english.name,'Mount Fuji');
+ assert.equal((await call('/api/admin/product','POST',{...p,version:p.version+2,english:{name:'x'.repeat(201)}})).status,400);
+ assert.equal(sql.prepare('SELECT version FROM products WHERE sku=?').get(p.sku).version,p.version+2);
+ sql.close();
+});

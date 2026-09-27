@@ -1,3 +1,4 @@
+import {productTranslations} from './product-translations.js';
 import {firstGiftForOrder} from './first-purchase.js';
 import {COUNTRY_CODES} from './countries.js';
 import {manageModules} from './modules.js';
@@ -8,10 +9,14 @@ const integer=(v,min,max)=>{if(!Number.isSafeInteger(v)||v<min||v>max)fail(400,'
 const page=url=>integer(Number(url.searchParams.get('page')||1),1,100000);
 const pattern=url=>'%'+str(url.searchParams.get('q')||'',100).replace(/[\\%_]/g,'\\$&')+'%';
 const imagePath=v=>typeof v==='string'&&(/^\/media\/[a-f0-9]{64}$/.test(v)||/^\/?[a-zA-Z0-9_.-]+\.(jpg|jpeg|png|webp)$/i.test(v));
-const publicProduct=p=>({sku:p.sku,family:p.family,name:p.name,variant:p.variant,description:p.description,category:p.category,category_id:p.category_id||'',price:p.price,images:JSON.parse(p.images),available:p.available,version:p.version,video:p.video||''});
+const publicProduct=p=>({sku:p.sku,family:p.family,name:p.name,variant:p.variant,description:p.description,category:p.category,category_id:p.category_id||'',price:p.price,images:JSON.parse(p.images),available:p.available,version:p.version,video:p.video||'',english:{name:p.en_source_name===p.name?p.en_name||'':'',variant:p.en_source_variant===p.variant?p.en_variant||'':'',description:p.en_source_description===p.description?p.en_description||'':''}});
 const rows=async(env,query,...params)=>(await env.DB.prepare(query).bind(...params).all()).results;
 const assertion=env=>env.DB.prepare('INSERT INTO catalog_checks(ok) SELECT CASE WHEN changes()=1 THEN 1 ELSE 0 END');
 function audit(env,m,action,target,before,after,reason){return env.DB.prepare('INSERT INTO commerce_audit VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),m.id,action,target,JSON.stringify(before),JSON.stringify(after),reason,stamp());}
+
+
+async function englishSchema(env){await env.DB.prepare("CREATE TABLE IF NOT EXISTS product_english(sku TEXT PRIMARY KEY,name TEXT NOT NULL,variant TEXT NOT NULL,description TEXT NOT NULL,source_name TEXT NOT NULL,source_variant TEXT NOT NULL,source_description TEXT NOT NULL)").run();}
+const englishColumns=',e.name AS en_name,e.variant AS en_variant,e.description AS en_description,e.source_name AS en_source_name,e.source_variant AS en_source_variant,e.source_description AS en_source_description';
 
 async function serviceSchema(env){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_service (member_id TEXT PRIMARY KEY REFERENCES members(id),member_number TEXT UNIQUE,version INTEGER NOT NULL,updated_at TEXT NOT NULL)").run();
@@ -47,10 +52,11 @@ export async function publicCommerce(request,env,url){
  }
  if(url.pathname==='/api/categories'&&request.method==='GET')return{categories:await rows(env,'SELECT * FROM categories ORDER BY parent,name')};
  if(url.pathname==='/api/catalog'&&request.method==='GET'){
-  let query="SELECT p.*,CASE WHEN f.confirmed=1 THEN i.available ELSE 0 END AS available,f.video FROM products p JOIN product_families f ON f.family=p.family JOIN inventory i ON i.sku=f.stock_sku WHERE p.active=1 AND (p.category!='pen' OR EXISTS(SELECT 1 FROM nib_types n WHERE n.name=p.variant AND n.active=1))",params=[];
+  await englishSchema(env);
+  let query="SELECT p.*,CASE WHEN f.confirmed=1 THEN i.available ELSE 0 END AS available,f.video"+englishColumns+" FROM products p LEFT JOIN product_english e ON e.sku=p.sku JOIN product_families f ON f.family=p.family JOIN inventory i ON i.sku=f.stock_sku WHERE p.active=1 AND (p.category!='pen' OR EXISTS(SELECT 1 FROM nib_types n WHERE n.name=p.variant AND n.active=1))",params=[];
   for(const key of ['sku','family'])if(url.searchParams.get(key)){query+=` AND p.${key}=?`;params.push(str(url.searchParams.get(key),100));}
   if(url.searchParams.get('category')){query+=" AND (p.category=? OR EXISTS(SELECT 1 FROM product_categories pc JOIN categories c ON c.id=pc.category_id WHERE pc.sku=p.sku AND (c.id=? OR c.parent=?)))";const c=str(url.searchParams.get('category'),100);params.push(c,c,c);}
-  if(url.searchParams.get('q')){query+=" AND p.name LIKE ? ESCAPE '\\'";params.push(pattern(url));}
+  if(url.searchParams.get('q')){const q=str(url.searchParams.get('q'),100).toLowerCase(),names=Object.entries(productTranslations).filter(([source,en])=>source.length<=100&&!source.includes('\n')&&en.toLowerCase().includes(q)).map(([source])=>source);query+=" AND (p.name LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\'"+(names.length?' OR p.name IN ('+names.map(()=>'?').join(',')+')':'')+')';params.push(pattern(url),pattern(url),...names);}
   if(!url.searchParams.get('sku')&&!url.searchParams.get('family'))query+=' GROUP BY p.family HAVING p.sku=min(p.sku)';
   params.push((page(url)-1)*24);const result=await rows(env,query+' ORDER BY p.name,p.sku LIMIT 25 OFFSET ?',...params);return{products:result.slice(0,24).map(publicProduct),hasMore:result.length>24};
  }return null;
@@ -72,9 +78,11 @@ export async function manageCommerce(request,env,url,m,body){
  if(path.startsWith('/api/admin/member'))await env.DB.prepare("CREATE TABLE IF NOT EXISTS member_contacts(member_id TEXT PRIMARY KEY REFERENCES members(id),offline INTEGER NOT NULL DEFAULT 0,email TEXT NOT NULL DEFAULT '',purchases TEXT NOT NULL DEFAULT '[]',version INTEGER NOT NULL DEFAULT 1)").run();
  if(path==='/api/admin/images'&&method==='POST')return upload(request,env);
  if(path==='/api/admin/products'&&method==='GET'){
-  const r=await rows(env,"SELECT p.*,(SELECT category_id FROM product_categories WHERE sku=p.sku) AS category_id,i.available,i.sold FROM products p JOIN product_families f ON f.family=p.family JOIN inventory i ON i.sku=f.stock_sku WHERE (p.name LIKE ? ESCAPE '\\' OR p.sku LIKE ? ESCAPE '\\') ORDER BY p.updated_at DESC,p.sku LIMIT 21 OFFSET ?",pattern(url),pattern(url),(page(url)-1)*20);return{products:r.slice(0,20).map(p=>({...publicProduct(p),active:p.active,sold:p.sold})),hasMore:r.length>20};
+  await englishSchema(env);
+  const r=await rows(env,"SELECT p.*,(SELECT category_id FROM product_categories WHERE sku=p.sku) AS category_id,i.available,i.sold"+englishColumns+" FROM products p LEFT JOIN product_english e ON e.sku=p.sku JOIN product_families f ON f.family=p.family JOIN inventory i ON i.sku=f.stock_sku WHERE (p.name LIKE ? ESCAPE '\\' OR p.sku LIKE ? ESCAPE '\\') ORDER BY p.updated_at DESC,p.sku LIMIT 21 OFFSET ?",pattern(url),pattern(url),(page(url)-1)*20);return{products:r.slice(0,20).map(p=>({...publicProduct(p),active:p.active,sold:p.sold})),hasMore:r.length>20};
  }
  if(path==='/api/admin/product'&&method==='POST'){
+  await englishSchema(env);
   const d=await body(request),sku=str(d.sku,100);if(!/^[a-zA-Z0-9\u3400-\u9fff_-]{1,100}$/.test(sku))fail(400,'商品代碼僅能使用中英文字、數字、底線或連字號');
   const old=await env.DB.prepare('SELECT * FROM products WHERE sku=?').bind(sku).first();if((old?.version||0)!==d.version)fail(409,'商品已更新，請重新載入');
   const p={sku,family:str(d.family||sku,100),name:str(d.name,200),variant:str(d.variant,100),description:str(d.description||'',12000),category:str(d.category,20),category_id:str(d.category_id||'',100),price:integer(d.price,1,10000000),active:integer(d.active,0,1),images:d.images};
@@ -86,6 +94,7 @@ export async function manageCommerce(request,env,url,m,body){
   const statements=old?[env.DB.prepare('UPDATE products SET family=?,name=?,variant=?,description=?,category=?,price=?,images=?,active=?,version=version+1,updated_at=? WHERE sku=? AND version=?').bind(p.family,p.name,p.variant,p.description,p.category,p.price,JSON.stringify(p.images),p.active,stamp(),sku,d.version)]:[env.DB.prepare('INSERT INTO inventory(sku,available) VALUES (?,0)').bind(sku),env.DB.prepare('INSERT INTO products(sku,family,name,variant,description,category,price,images,active,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(sku,p.family,p.name,p.variant,p.description,p.category,p.price,JSON.stringify(p.images),p.active,stamp())];
   statements.push(assertion(env),env.DB.prepare('INSERT OR IGNORE INTO inventory(sku,available) VALUES (?,0)').bind('body-'+p.family),env.DB.prepare('INSERT OR IGNORE INTO product_families(family,stock_sku,confirmed) VALUES (?,?,1)').bind(p.family,'body-'+p.family));
   if(p.category_id)statements.push(env.DB.prepare('INSERT INTO product_categories VALUES (?,?) ON CONFLICT(sku) DO UPDATE SET category_id=excluded.category_id').bind(sku,p.category_id));else statements.push(env.DB.prepare('DELETE FROM product_categories WHERE sku=?').bind(sku));
+  if(d.english!==undefined){if(!d.english||typeof d.english!=='object'||Array.isArray(d.english))fail(400,'英文欄位格式不正確');const en={name:str(d.english.name||'',200),variant:str(d.english.variant||'',100),description:str(d.english.description||'',12000)};statements.push(env.DB.prepare('INSERT INTO product_english VALUES (?,?,?,?,?,?,?) ON CONFLICT(sku) DO UPDATE SET name=excluded.name,variant=excluded.variant,description=excluded.description,source_name=excluded.source_name,source_variant=excluded.source_variant,source_description=excluded.source_description').bind(sku,en.name,en.variant,en.description,p.name,p.variant,p.description));}
   statements.push(audit(env,m,old?'product.update':'product.create',sku,old?{version:old.version,price:old.price,active:old.active}:null,{version:(old?.version||0)+1,price:p.price,active:p.active},'商品編輯'));await env.DB.batch(statements);return{sku};
  }
  if(path==='/api/admin/stock'&&method==='POST'){fail(409,'請改用筆款共用庫存管理');

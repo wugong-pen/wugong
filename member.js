@@ -1,3 +1,4 @@
+import {loadItemTranslations} from './i18n.js';
 import {countryOptions} from './countries.js';
 const $=id=>document.getElementById(id);
 const next=new URLSearchParams(location.search).get('next')==='checkout';
@@ -41,12 +42,12 @@ function orderCard(order){
   if(order.reservation_state==='paying')card.append(node('p',order.payment==='bank'?'匯款須於三天內完成並回報；已回報的訂單會保留庫存等待對帳。':'付款結果確認中，庫存持續保留；若已付款，系統會定期查詢結果，請勿另建訂單重複付款。','hint'));
 card.append(node('h3',order.order_number),node('span',states[order.status]||'處理中','status'));
   const date=new Date(order.created_at);card.append(node('p',Number.isFinite(date.getTime())?date.toLocaleString('zh-TW'):'','hint'));
-  let items=[];try{items=JSON.parse(order.items);}catch{}const list=document.createElement('ul');
+  let items=[];try{items=JSON.parse(order.items);}catch{}void loadItemTranslations(items);const list=document.createElement('ul');
   for(const item of items)list.append(node('li',`${item.product}${item.nib?' · '+item.nib:''} × ${item.quantity}`));
   card.append(list,node('p',`訂單金額 NT$${Number(order.total).toLocaleString('zh-TW')}`));
   const details=document.createElement('details');details.append(node('summary','查看收件與訂單資料'));const dl=document.createElement('dl');
   const region=new Intl.DisplayNames(['zh-Hant'],{type:'region'});
-  for(const [label,value]of [['收件人',order.customer_name],['電話',order.phone],['電子郵件',order.email],['收件國家',order.shipping_country==='TW'?'台灣':region.of(order.shipping_country)],['地址',order.address],['配送方式',order.shipping],['付款方式',payments[order.payment]||order.payment],['備註',order.note||'無']])dl.append(node('dt',label),node('dd',value));
+  for(const [label,value]of [['收件人',order.customer_name],['電話',order.phone],['電子郵件',order.email],['收件國家',order.shipping_country==='TW'?'台灣':region.of(order.shipping_country)],['地址',order.address],['配送方式',order.shipping],['付款方式',payments[order.payment]||order.payment],['備註',order.note||'無']]){const detail=node('dd',value);if(['收件人','電話','電子郵件','地址','備註'].includes(label))detail.setAttribute('translate','no');dl.append(node('dt',label),detail);}
   details.append(dl);card.append(details);
   if(['bank','linepay','paypal'].includes(order.payment)&&order.status==='pending'){
    const link=node('a',order.payment==='bank'?'查看匯款資料／回報':'繼續測試付款');link.href='/payment-return.html?'+new URLSearchParams({order:order.order_number,provider:order.payment});card.append(link);
