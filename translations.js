@@ -504,3 +504,5 @@ Object.assign(extraTranslations,{
   "WUGONG製筆在製筆過程如同練武一般講究形、氣、意，「筆有良形，筆具質氣，筆能會意。」\n練字如練武，需持之以恆不斷練習方能寫出形、氣、意的好字。": "At WUGONG, making a pen is like practising martial arts: it brings together form, energy and intention. A pen should have a pleasing form, a character of its own and a connection to the writer. Like martial arts, handwriting takes steady practice to bring these qualities to life.",
   "真正的工藝不只是外觀，而是對每一道工序的堅持。\n從設計草圖開始，經過加工、研磨、組裝與細節修整，WUGONG 希望讓每一件作品，都能在時間中持續留下質感。": "Craftsmanship lives in every step of the process. From sketches to machining, polishing, assembly and finishing, WUGONG creates works whose character endures over time."
 });
+
+Object.assign(extraTranslations,{'不知道怎麼選？查看筆尖與規格指南 →':'Need help choosing? View the Nib & Specification Guide →','筆尖與規格選購指南 →':'Nib & Specification Guide →'});

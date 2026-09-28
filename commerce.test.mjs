@@ -397,3 +397,30 @@ test('English product fields preserve canonical checkout specs and invalidate st
  assert.equal(sql.prepare('SELECT version FROM products WHERE sku=?').get(p.sku).version,p.version+2);
  sql.close();
 });
+
+
+test('nib guide publication is admin-only, versioned, reversible and audited',async()=>{
+ const {sql,call}=setup();const {blankGuide}=await import('./nib-guide-model.js');const p=blankGuide();p.zh.name='單尖';p.zh.features='特色待確認 <script>text only</script>';p.zh.writing='依實際使用說明';p.en.name='Single nib';
+ assert.deepEqual((await call('/api/nib-guides','GET',undefined,'')).data.entries,[]);
+ assert.equal((await call('/api/admin/nib-guides','POST',p,'member')).status,403);
+ assert.equal((await call('/api/admin/nib-guides','POST',p,'admin',{Origin:'https://other.test'})).status,403);
+ let saved=(await call('/api/admin/nib-guides','POST',p)).data.entry;assert.equal(saved.version,1);
+ assert.equal((await call('/api/nib-guides','GET',undefined,'')).data.entries.length,0);
+ saved=(await call('/api/admin/nib-guides','POST',{...saved,status:'published'})).data.entry;
+ const shown=(await call('/api/nib-guides','GET',undefined,'')).data.entries[0];assert.equal(shown.zh.features,p.zh.features);assert.equal(shown.en.name,'Single nib');assert.equal(shown.version,undefined);
+ assert.equal((await call('/api/admin/nib-guides','POST',{...saved,version:1,zh:{...p.zh,name:'stale'}})).status,409);
+ assert.equal((await call('/api/admin/nib-guides','POST',{...saved,status:'archived'})).status,200);
+ assert.equal((await call('/api/nib-guides','GET',undefined,'')).data.entries.length,0);
+ assert.equal(sql.prepare("SELECT count(*) n FROM commerce_audit WHERE action LIKE 'guide.%'").get().n,3);
+ const archived=(await call('/api/admin/nib-guides')).data.entries[0];assert.equal((await call('/api/admin/nib-guides','POST',{...archived,status:'published'})).status,200);sql.close();
+});
+test('nib guide validates fields, photos, pagination and transactional audit',async()=>{
+ const {sql,call}=setup();const {blankGuide}=await import('./nib-guide-model.js');const p=blankGuide();p.zh.name='試寫';
+ for(const bad of [{...p,status:'published'},{...p,position:-1},{...p,photos:[{src:'https://evil.test/x.jpg',zh:'',en:''}]},{...p,photos:[{src:'/media/'+'0'.repeat(64),zh:'',en:''}]},{...p,en:{...p.en,features:'x'.repeat(801)}},{...p,zh:null},{...p,version:1}])assert.equal((await call('/api/admin/nib-guides','POST',bad)).status,400);
+ assert.equal((await call('/api/nib-guides?page=-1','GET',undefined,'')).status,400);
+ p.zh.features='說明';p.status='published';p.photos=[{src:'/28731.jpg',zh:'同樣紙墨試寫',en:'Writing sample'}];
+ const saved=(await call('/api/admin/nib-guides','POST',p)).data.entry;assert.equal(saved.photos[0].en,'Writing sample');
+ sql.exec("CREATE TRIGGER guide_audit_failure BEFORE INSERT ON commerce_audit WHEN NEW.action='guide.update' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");
+ assert.equal((await call('/api/admin/nib-guides','POST',{...saved,status:'archived'})).status,500);
+ assert.equal((await call('/api/nib-guides','GET',undefined,'')).data.entries.length,1);sql.close();
+});

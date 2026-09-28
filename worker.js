@@ -1,3 +1,4 @@
+import {listGuides,manageGuides} from './nib-guide-store.js';
 import {notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
 import {readInvoice,manageInvoice} from './manual-invoice.js';
 import {shippingRegions,shippingQuote,shippingStatements} from './shipping.js';
@@ -108,6 +109,7 @@ async function adminApi(request,env,url) {
     return json({success:true},200,{'Set-Cookie':adminCookie('',0)});
   }
   const m=await adminSession(request,env);
+  if(path==='/api/admin/nib-guides'){if(method!=='GET')await rate(env,`admin-guide:${m.id}`,120);return json({success:true,...await manageGuides(request,env,url,m,body)});}
   if(['/api/admin/content','/api/admin/content-entry'].includes(path)){if(method!=='GET')await rate(env,`admin-content:${m.id}`,120);return json({success:true,...await manageContent(request,env,url,m,body)});}
   if(path==='/api/admin/homepage'){if(method!=='GET')await rate(env,`admin-homepage:${m.id}`,60);return json({success:true,...await manageHomepage(request,env,m,body)});}
   if(path.startsWith('/api/admin/')&&!['/api/admin/session','/api/admin/orders','/api/admin/order/status'].includes(path)&&!path.startsWith('/api/admin/orders/')) {
@@ -215,6 +217,7 @@ async function consumeEmailToken(request,env,purpose) {
 }
 async function api(request,env,url,ctx) {
   const path=url.pathname,method=request.method;
+  if(path==='/api/nib-guides'&&method==='GET')return json({success:true,...await listGuides(env,url)});
   if(['/api/content','/api/content-entry'].includes(path)&&method==='GET')return json({success:true,...await publicContent(env,url)});
   if(path==='/api/homepage'&&method==='GET')return json({success:true,...await readHomepage(env)});
   if(['/api/catalog','/api/categories'].includes(path)&&method==='GET')return json({success:true,...await publicCommerce(request,env,url)});
