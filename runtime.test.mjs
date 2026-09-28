@@ -146,8 +146,9 @@ test('Cloudflare runtime supports password hashing and D1 membership',async()=>{
   assert.equal((await post('/api/admin/order/status',{...cancelManual,invoiceCancelled:true},adminHeaders)).status,200);
   assert.equal((await db.prepare("SELECT available FROM inventory WHERE sku='body-product-fuji'").first()).available,available+1);
   const noticeRows=await db.prepare('SELECT * FROM order_notifications WHERE order_number=?').bind(num).all();assert.equal(noticeRows.results.length,1);assert.equal(JSON.parse(noticeRows.results[0].payload).to[0],'wugong.pen@gmail.com');
+  const buyerNotice=await db.prepare('SELECT payload FROM order_notifications WHERE id=?').bind('buyer-confirmed/'+num).first();assert.deepEqual(JSON.parse(buyerNotice.payload).to,['runtime@example.test']);
   assert.equal((await mf.dispatchFetch('https://shop.test/api/admin/order-notifications',{headers:{Cookie:cookie}})).status,403);
-  const noticeState=await (await mf.dispatchFetch('https://shop.test/api/admin/order-notifications?order='+num,{headers:adminHeaders})).json();assert.equal(noticeState.notifications.length,1);assert.equal(noticeState.notifications[0].state,'queued');
+  const noticeState=await (await mf.dispatchFetch('https://shop.test/api/admin/order-notifications?order='+num,{headers:adminHeaders})).json();assert.equal(noticeState.notifications.length,2);assert.ok(noticeState.notifications.some(n=>n.kind==='buyer_confirmed'));assert.equal(noticeState.notifications[0].state,'queued');
  }finally{await mf.dispose();}
 });
 

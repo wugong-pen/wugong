@@ -1,5 +1,5 @@
 import {listGuides,manageGuides} from './nib-guide-store.js';
-import {notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
+import {buyerNotificationStatement,shipmentNotification,notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
 import {readInvoice,manageInvoice} from './manual-invoice.js';
 import {shippingRegions,shippingQuote,shippingStatements} from './shipping.js';
 import {firstGiftQuote,firstGiftStatements,firstSchema,giftPhone,giftNotice} from './first-purchase.js';
@@ -88,7 +88,7 @@ async function adminSession(request,env,required=true) {
   if(!m&&required)fail(403,'請使用有權限的管理員帳號登入');
   return m;
 }
-async function adminApi(request,env,url) {
+async function adminApi(request,env,url,ctx) {
   const path=url.pathname,method=request.method;
   if(path==='/api/admin/login'&&method==='POST') {
     await rate(env,`admin-login-ip:${request.headers.get('CF-Connecting-IP')||'local'}`,20);
@@ -163,11 +163,14 @@ async function adminApi(request,env,url) {
     }
     if(!Object.hasOwn(transitions,data.expectedStatus)||transitions[data.expectedStatus]!==data.status)fail(409,'只能將已付款訂單標記出貨，或將已出貨訂單標記完成');
     const id=crypto.randomUUID();
+    const shipment=data.status==='shipped'?await shipmentNotification(env,number,id):[];
     const results=await env.DB.batch([
       env.DB.prepare('INSERT INTO admin_audit(id,member_id,action,order_number,previous_status,next_status,created_at) SELECT ?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM orders WHERE order_number=? AND status=?)').bind(id,m.id,'order.status',number,data.expectedStatus,data.status,new Date().toISOString(),number,data.expectedStatus),
-      env.DB.prepare('UPDATE orders SET status=? WHERE order_number=? AND status=? AND EXISTS(SELECT 1 FROM admin_audit WHERE id=?)').bind(data.status,number,data.expectedStatus,id)
+      env.DB.prepare('UPDATE orders SET status=? WHERE order_number=? AND status=? AND EXISTS(SELECT 1 FROM admin_audit WHERE id=?)').bind(data.status,number,data.expectedStatus,id),
+      ...shipment
     ]);
     if(!results[1].meta.changes)fail(409,'訂單狀態已變更或訂單不存在，請重新整理');
+    if(shipment.length){const delivery=drainNotifications(env).catch(()=>console.error('Buyer notification delivery deferred'));if(ctx?.waitUntil)ctx.waitUntil(delivery);else await delivery;}
     return json({success:true});
   }
   fail(404,'找不到此功能');
@@ -223,7 +226,7 @@ async function api(request,env,url,ctx) {
   if(['/api/catalog','/api/categories'].includes(path)&&method==='GET')return json({success:true,...await publicCommerce(request,env,url)});
   if(path==='/api/payments/ecpay/notify')return notify(request,env);
   if(!['GET','HEAD'].includes(method)&&(request.headers.get('Origin')!==url.origin||request.headers.get('Sec-Fetch-Site')==='cross-site')) fail(403,'請從本站頁面操作');
-  if(path.startsWith('/api/admin/')||path==='/api/orders'||path==='/api/order/status')return adminApi(request,env,url);
+  if(path.startsWith('/api/admin/')||path==='/api/orders'||path==='/api/order/status')return adminApi(request,env,url,ctx);
   if(path==='/api/member'&&method==='GET') {const m=await session(request,env,false);return json({success:true,member:m?publicMember(m):null,emailAvailable:mailAvailable(env,url)});}
   if(path==='/api/member/verify-email'&&method==='POST')return consumeEmailToken(request,env,'verify');
   if(path==='/api/member/reset-password'&&method==='POST')return consumeEmailToken(request,env,'reset');
@@ -330,6 +333,7 @@ async function api(request,env,url,ctx) {
       ...catalogGuards(env,items),
       env.DB.prepare('INSERT INTO orders(order_number,customer_name,phone,email,address,shipping,payment,note,items,total,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(number,name,phone,m.email,address,shipping,payment,note+'\n配送運費：NT$'+q.shippingFee+(q.gift?'\n優惠券贈品：'+q.gift:'')+(firstGift?'\n首購贈品'+(firstGift.code?'（'+firstGift.code+'）':'')+'：'+firstGift.description+'\n'+giftNotice:''),JSON.stringify(items),total,'pending',createdAt),
       notificationStatement(env,{order_number:number,created_at:createdAt,email:m.email,country:c.country,items,total,payment}),
+      buyerNotificationStatement(env,{order_number:number,created_at:createdAt,email:m.email,items,total,payment},'confirmed'),
       env.DB.prepare('INSERT INTO member_orders(order_number,member_id,shipping_country,request_key) VALUES (?,?,?,?)').bind(number,m.id,c.country,key),
       ...shippingStatements(env,q,number),...reserveStatements(env,number,items,payment),...couponStatements(env,q,m.id,number),...firstGiftStatements(env,firstGift,m.id,number,giftPhone(phone,c.country))
     ]);}catch(error){const retry=await env.DB.prepare('SELECT order_number FROM member_orders WHERE member_id=? AND request_key=?').bind(m.id,key).first();if(!retry){if(error.message?.includes('CHECK constraint failed: quantity'))fail(409,'商品庫存不足，請調整數量後再試');throw error;}return json({success:true,orderNumber:retry.order_number});}

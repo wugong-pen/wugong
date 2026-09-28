@@ -32,12 +32,38 @@ export async function drainNotifications(env,send=fetch){
 }
 export async function notificationStatus(env,number){
  await notificationSchema(env);
- const rows=await env.DB.prepare('SELECT order_number,state,attempts,last_error,created_at,sent_at FROM order_notifications WHERE (? IS NULL OR order_number=?) ORDER BY created_at DESC LIMIT 10').bind(number||null,number||null).all();
- return {recipient:ADMIN_EMAIL,configured:notificationConfigured(env),notifications:rows.results};
+ const rows=await env.DB.prepare('SELECT id,order_number,state,attempts,last_error,created_at,sent_at FROM order_notifications WHERE (? IS NULL OR order_number=? OR id=? OR id=?) ORDER BY created_at DESC LIMIT 10').bind(number||null,number||null,'buyer-confirmed/'+number,'buyer-shipped/'+number).all();
+ return {recipient:ADMIN_EMAIL,configured:notificationConfigured(env),notifications:rows.results.map(r=>({...r,order_number:r.order_number||(r.id.startsWith('buyer-')?r.id.split('/')[1]:null),kind:r.id.startsWith('buyer-shipped/')?'buyer_shipped':r.id.startsWith('buyer-confirmed/')?'buyer_confirmed':'admin'}))};
 }
 export async function queueTestNotification(env){
  await notificationSchema(env);const id='notification-test/'+crypto.randomUUID();
  const payload={from:env.MAIL_FROM||'WUGONG <noreply@mail.wugong-pen.com>',to:[ADMIN_EMAIL],subject:'【寄信測試】WUGONG 管理員新訂單通知',text:'這是一封管理員通知測試信，不是買家訂單，無需收款或出貨。\n之後買家成功下單，您會在此信箱收到訂單摘要及後台連結。'};
  await env.DB.prepare('INSERT INTO order_notifications(id,payload,created_at) VALUES (?,?,?)').bind(id,JSON.stringify(payload),new Date().toISOString()).run();
  return id;
+}
+
+// Buyer event IDs are unique; NULL preserves the legacy unique admin order key.
+export function buyerNotificationPayload(env,order,event,shipping={}) {
+ const shipped=event==='shipped',test=env.APP_ENV==='staging';
+ const items=typeof order.items==='string'?JSON.parse(order.items):order.items;
+ const lines=items.map(i=>`${i.product}${i.nib?' / '+i.nib:''} × ${i.quantity}`).join('\n');
+ const payment=order.payment==='paypal_invoice'
+  ?'請等待我們確認商品與運費，再由專人另寄 PayPal 帳單至您的 Email。收到帳單前無需付款；本信不是付款帳單。\nPlease wait while we confirm your items and shipping. We will email a separate PayPal invoice. No payment is required before you receive it; this email is not an invoice.'
+  :'下單不代表付款完成，請依結帳頁或會員購買紀錄確認付款狀態。\nPlacing an order does not confirm payment. Please check the checkout page or your purchase history for payment status.';
+ const shippingText=`物流公司 / Carrier: ${shipping.carrier||'請回覆本信洽詢 / Reply to this email for details'}\n物流單號 / Tracking number: ${shipping.tracking||'尚未提供，請回覆本信洽詢 / Not yet available; reply to this email for details'}\n物流追蹤資訊可能稍後才會更新。\nTracking information may take time to appear.`;
+ return {from:env.MAIL_FROM||'WUGONG <noreply@mail.wugong-pen.com>',to:[order.email],reply_to:ADMIN_EMAIL,
+ subject:(test?'【測試 / TEST】':'')+'WUGONG '+(shipped?'出貨通知 / Shipping notification ':'下單確認 / Order confirmation ')+order.order_number,
+ text:`${test?'【測試通知】網站尚未開放正式收款；請勿付款。本信不代表實際出貨。\nTEST NOTICE: Live payments are unavailable. Do not pay. This email does not confirm a real shipment.\n\n':''}${shipped?'您的訂單已標記為出貨。\nYour order has been marked as shipped.':'我們已收到您的訂單，謝謝您的選購。\nThank you. We have received your order.'}\n\n訂單編號 / Order number: ${order.order_number}\n\n${lines}\n\n訂單總額（含運費）/ Total including shipping: NT$${order.total}\n\n${shipped?shippingText:payment}\n\n登入會員查看購買紀錄 / Sign in to view purchase history:\n${env.MAIL_ORIGIN||FALLBACK_ORIGIN}/member.html\n\n如有疑問，請回覆本信並提供訂單編號。\nFor assistance, reply with your order number.\n${ADMIN_EMAIL}`};
+}
+export function buyerNotificationStatement(env,order,event,auditId=null,shipping={}) {
+ const id='buyer-'+event+'/'+order.order_number,payload=buyerNotificationPayload(env,order,event,shipping);
+ const values=[id,JSON.stringify(payload),new Date().toISOString()];
+ return auditId===null?env.DB.prepare('INSERT INTO order_notifications(id,payload,created_at) VALUES (?,?,?)').bind(...values):env.DB.prepare('INSERT INTO order_notifications(id,payload,created_at) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM admin_audit WHERE id=?)').bind(...values,auditId);
+}
+export async function shipmentNotification(env,number,auditId){
+ const order=await env.DB.prepare('SELECT * FROM orders WHERE order_number=?').bind(number).first();
+ if(!order?.email)return []; // Legacy orders may have no buyer email.
+ let shipping={};try{shipping=await env.DB.prepare('SELECT carrier,tracking FROM order_management WHERE order_number=?').bind(number).first()||{};}catch(e){if(!String(e.message).includes('no such table: order_management'))throw e;}
+ await notificationSchema(env);
+ return [buyerNotificationStatement(env,order,'shipped',auditId,shipping)];
 }

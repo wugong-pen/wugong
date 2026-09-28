@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {notificationSchema,notificationStatement,notificationPayload,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
+import {buyerNotificationPayload,buyerNotificationStatement,notificationSchema,notificationStatement,notificationPayload,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
 function setup(){const sql=new DatabaseSync(':memory:');const DB={prepare(q){let p=[];return{bind(...v){p=v;return this;},async first(){return sql.prepare(q).get(...p)||null;},async all(){return{results:sql.prepare(q).all(...p)};},async run(){return{meta:{changes:sql.prepare(q).run(...p).changes}};}};}};return{sql,env:{DB,APP_ENV:'staging',RESEND_API_KEY:'fake-test-only',MAIL_FROM:'WUGONG <test@example.test>',MAIL_ORIGIN:'https://shop.example.test'}};}
 const order={order_number:'WG-NOTIFY-1',created_at:'2026-09-25T00:00:00.000Z',email:'buyer@example.test',country:'JP',items:[{product:'<img src=x>',quantity:1}],total:10500,payment:'paypal_invoice'};
 test('notification is a fixed recipient plain-text order snapshot with authenticated link',()=>{const {env}=setup(),p=notificationPayload(env,order);assert.deepEqual(p.to,['wugong.pen@gmail.com']);assert.equal(p.html,undefined);assert.match(p.text,/10500/);assert.match(p.text,/不代表買家已付款/);assert.match(p.text,/admin-order-detail.html\?order=WG-NOTIFY-1/);assert.match(p.subject,/測試訂單/);});
@@ -10,3 +10,18 @@ test('uncertain send retries use identical payload and key, then stop after acce
 test('missing configuration keeps order notification queued without sending',async()=>{const {sql,env}=setup();delete env.RESEND_API_KEY;await notificationSchema(env);await notificationStatement(env,order).run();await drainNotifications(env,()=>{throw Error('must not send');});const d=await notificationStatus(env);assert.equal(d.configured,false);assert.equal(d.notifications[0].attempts,0);sql.close();});
 test('uncertain messages older than deduplication window require manual attention',async()=>{const {sql,env}=setup();await notificationSchema(env);await notificationStatement(env,order).run();sql.prepare('UPDATE order_notifications SET first_attempt=?,attempts=1').run(Date.now()-24*3600000);await drainNotifications(env,()=>{throw Error('must not send');});assert.equal(sql.prepare('SELECT state FROM order_notifications').get().state,'attention');sql.close();});
 test('test notification sends no customer data or real order',async()=>{const {sql,env}=setup();await queueTestNotification(env);const row=sql.prepare('SELECT * FROM order_notifications').get();assert.equal(row.order_number,null);assert.match(JSON.parse(row.payload).text,/不是買家訂單/);sql.close();});
+
+test('buyer confirmations are bilingual, distinguish invoice from payment, and omit private notes',()=>{
+ const {env,sql}=setup();const p=buyerNotificationPayload(env,{...order,note:'SECRET'},'confirmed');
+ assert.deepEqual(p.to,[order.email]);assert.equal(p.reply_to,'wugong.pen@gmail.com');assert.match(p.text,/separate PayPal invoice/);assert.match(p.text,/本信不是付款帳單/);assert.match(p.text,/Do not pay/);assert.ok(!p.text.includes('SECRET'));assert.equal(p.html,undefined);
+ const bank=buyerNotificationPayload({...env,APP_ENV:'production'},{...order,payment:'bank'},'confirmed');assert.match(bank.text,/does not confirm payment/);assert.ok(!bank.subject.includes('TEST'));
+ const ship=buyerNotificationPayload(env,order,'shipped',{carrier:'郵局',tracking:'TRACK-1',admin_note:'SECRET'});assert.match(ship.text,/TRACK-1/);assert.match(ship.text,/Carrier: 郵局/);assert.ok(!ship.text.includes('SECRET'));sql.close();
+});
+test('buyer events coexist with administrator notification and retry without changing their payload',async()=>{
+ const {env,sql}=setup();sql.exec('CREATE TABLE admin_audit(id TEXT PRIMARY KEY)');await notificationSchema(env);await notificationStatement(env,order).run();await buyerNotificationStatement(env,order,'confirmed').run();
+ await buyerNotificationStatement(env,order,'shipped','missing',{tracking:'TRACK'}).run();assert.equal(sql.prepare('SELECT count(*) n FROM order_notifications').get().n,2);
+ sql.exec("INSERT INTO admin_audit VALUES ('ship')");await buyerNotificationStatement(env,order,'shipped','ship',{tracking:'TRACK'}).run();await assert.rejects(buyerNotificationStatement(env,order,'confirmed').run());
+ const d=await notificationStatus(env,order.order_number);assert.equal(d.notifications.length,3);assert.deepEqual(new Set(d.notifications.map(r=>r.kind)),new Set(['admin','buyer_confirmed','buyer_shipped']));
+ const requests=[];await drainNotifications(env,async(u,o)=>{requests.push(o);throw Error('timeout');});sql.exec('UPDATE order_notifications SET next_attempt=0');await drainNotifications(env,async(u,o)=>{requests.push(o);return Response.json({id:'receipt'});});
+ for(const id of ['new-order/','buyer-confirmed/','buyer-shipped/']){const sent=requests.filter(r=>r.headers['Idempotency-Key']===id+order.order_number);assert.equal(sent.length,2);assert.equal(sent[0].body,sent[1].body);}sql.close();
+});
