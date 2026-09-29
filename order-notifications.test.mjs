@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {validateFactoryDate,buyerNotificationPayload,buyerNotificationStatement,notificationSchema,notificationStatement,notificationPayload,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
+import {CARE_DELAY_MS,careNotificationPayload,careNotificationStatements,validateFactoryDate,buyerNotificationPayload,buyerNotificationStatement,notificationSchema,notificationStatement,notificationPayload,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
 function setup(){const sql=new DatabaseSync(':memory:');const DB={prepare(q){let p=[];return{bind(...v){p=v;return this;},async first(){return sql.prepare(q).get(...p)||null;},async all(){return{results:sql.prepare(q).all(...p)};},async run(){return{meta:{changes:sql.prepare(q).run(...p).changes}};}};}};return{sql,env:{DB,APP_ENV:'staging',RESEND_API_KEY:'fake-test-only',MAIL_FROM:'WUGONG <test@example.test>',MAIL_ORIGIN:'https://shop.example.test'}};}
 const order={order_number:'WG-NOTIFY-1',created_at:'2026-09-25T00:00:00.000Z',email:'buyer@example.test',country:'JP',items:[{product:'<img src=x>',quantity:1}],total:10500,payment:'paypal_invoice'};
 test('notification is a fixed recipient plain-text order snapshot with authenticated link',()=>{const {env}=setup(),p=notificationPayload(env,order);assert.deepEqual(p.to,['wugong.pen@gmail.com']);assert.equal(p.html,undefined);assert.match(p.text,/10500/);assert.match(p.text,/不代表買家已付款/);assert.match(p.text,/admin-order-detail.html\?order=WG-NOTIFY-1/);assert.match(p.subject,/測試訂單/);});
@@ -27,3 +27,25 @@ test('buyer events coexist with administrator notification and retry without cha
 });
 
 test('factory dates reject invalid calendar dates and shipment email states one-year warranty',()=>{for(const d of ['', '2026-02-30','2100-01-01','bad'])assert.throws(()=>validateFactoryDate(d));assert.equal(validateFactoryDate('2024-02-29'),'2024-02-29');const {env,sql}=setup();const p=buyerNotificationPayload(env,order,'shipped',{factory_date:'2026-01-01'});assert.match(p.text,/Factory date: 2026-01-01/);assert.match(p.text,/One year from the factory date/);sql.close();});
+
+test('care email is bilingual, replyable and does not assume parcel arrival or promise a one-time service',()=>{
+ const {env,sql}=setup(),p=careNotificationPayload(env,order);assert.deepEqual(p.to,[order.email]);assert.equal(p.reply_to,'wugong.pen@gmail.com');for(const text of ['刮紙','出墨不順','尚未收到商品','scratchy','has not arrived','one-year warranty'])assert.ok(p.text.includes(text),text);assert.ok(!p.text.includes('一次'));assert.equal(p.html,undefined);sql.close();
+});
+test('care is scheduled atomically only for pen orders, waits five days and sends once after completion',async t=>{
+ const {env,sql}=setup();sql.exec("CREATE TABLE admin_audit(id TEXT PRIMARY KEY);CREATE TABLE orders(order_number TEXT PRIMARY KEY,status TEXT);INSERT INTO admin_audit VALUES ('ship')");await notificationSchema(env);
+ const pen={...order,items:[{product:'Pen',category:'pen',quantity:1}]};sql.prepare('INSERT INTO orders VALUES (?,?)').run(order.order_number,'completed');
+ assert.equal(careNotificationStatements(env,{...order,items:[{category:'ink'}]},'ship').length,0);
+ await careNotificationStatements(env,pen,'missing')[0].run();assert.equal(sql.prepare('SELECT count(*) n FROM order_notifications').get().n,0);
+ const start=Date.now();t.mock.method(Date,'now',()=>start);await careNotificationStatements(env,pen,'ship')[0].run();await assert.rejects(careNotificationStatements(env,pen,'ship')[0].run());
+ const row=sql.prepare('SELECT * FROM order_notifications').get();assert.equal(row.next_attempt,start+CARE_DELAY_MS);assert.equal(row.first_attempt,null);
+ const state=await notificationStatus(env,order.order_number);assert.equal(state.notifications[0].kind,'buyer_care');assert.equal(state.notifications[0].next_attempt,start+CARE_DELAY_MS);
+ let calls=0;const send=async()=>{calls++;return Response.json({id:'care-receipt'});};
+ await drainNotifications(env,send);assert.equal(calls,0);t.mock.method(Date,'now',()=>start+CARE_DELAY_MS-1);await drainNotifications(env,send);assert.equal(calls,0);
+ t.mock.method(Date,'now',()=>start+CARE_DELAY_MS);await Promise.all([drainNotifications(env,send),drainNotifications(env,send)]);await drainNotifications(env,send);assert.equal(calls,1);assert.equal(sql.prepare('SELECT state FROM order_notifications').get().state,'sent');sql.close();
+});
+test('care suppresses cancelled orders and failed attempts retain the same payload and key',async()=>{
+ const {env,sql}=setup();sql.exec("CREATE TABLE admin_audit(id TEXT PRIMARY KEY);CREATE TABLE orders(order_number TEXT PRIMARY KEY,status TEXT);INSERT INTO admin_audit VALUES ('ship')");await notificationSchema(env);
+ const pen={...order,items:[{category:'pen'}]};sql.prepare('INSERT INTO orders VALUES (?,?)').run(order.order_number,'cancelled');await careNotificationStatements(env,pen,'ship')[0].run();sql.exec('UPDATE order_notifications SET next_attempt=0');await drainNotifications(env,()=>{throw Error('must not send');});assert.equal(sql.prepare('SELECT state FROM order_notifications').get().state,'cancelled');
+ const other={...pen,order_number:'SECOND'};sql.prepare('INSERT INTO orders VALUES (?,?)').run('SECOND','shipped');await careNotificationStatements(env,other,'ship')[0].run();sql.exec('UPDATE order_notifications SET next_attempt=0');const requests=[];
+ await drainNotifications(env,async(u,o)=>{requests.push(o);throw Error('connection lost');});sql.exec('UPDATE order_notifications SET next_attempt=0');await drainNotifications(env,async(u,o)=>{requests.push(o);return Response.json({id:'care-retry'});});assert.equal(requests.length,2);assert.equal(requests[0].body,requests[1].body);assert.equal(requests[0].headers['Idempotency-Key'],requests[1].headers['Idempotency-Key']);sql.close();
+});

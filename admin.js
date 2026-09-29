@@ -63,7 +63,7 @@ if(document.body.dataset.page==='login'){
 }
 async function orderManagement(number){
  document.getElementById('order-management')?.remove();
- const d=await api('/api/admin/order-management?order='+encodeURIComponent(number)),form=node('form');form.id='order-management';form.className='manage-form';form.append(node('h2','內部備註與出貨資料'),node('p','請先儲存物流公司與單號，再標記為已出貨；系統會寄送買家出貨通知。出貨後修改物流資料不會自動重寄，如需更正已寄出的資料，請另行聯絡買家。'));
+ const d=await api('/api/admin/order-management?order='+encodeURIComponent(number)),form=node('form');form.id='order-management';form.className='manage-form';form.append(node('h2','內部備註與出貨資料'),node('p','請先儲存物流公司與單號，再標記為已出貨；系統會寄送買家出貨通知；含鋼筆的訂單將於出貨後第 5 天自動寄送書寫關懷信。出貨後修改物流資料不會自動重寄，如需更正已寄出的資料，請另行聯絡買家。'));
  if(d.firstGift)form.append(node('p','首購資格：'+({reserved:'保留中（完成訂單後記為已領取）',received:'已領取',released:'已恢復資格；本取消／失效訂單不再贈送'})[d.firstGift.state]),node('p',d.firstGift.notice));
  if(d.gift)form.append(node('p',(d.firstGift?.state==='released'?'原訂單贈品紀錄：':'贈送商品：')+d.gift.description+(d.firstGift?.state==='released'?'（此訂單已失效）':'（請核對出貨）')));
  if(d.discount)form.append(node('p','優惠券 '+d.discount.code+'｜商品小計 NT$'+d.discount.subtotal.toLocaleString()+'｜折抵 NT$'+d.discount.discount.toLocaleString()));

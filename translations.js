@@ -100,6 +100,8 @@ export const translations = {
   "初步確認後，我們會告知寄送地址與安排；請先與我們確認再寄回。": "After an initial review, we will provide the return address and shipping arrangements. Please contact us before sending the product.",
   "收到商品並檢查後，告知保固適用情形、處理方式及相關費用；如需付費維修，取得您的同意後才進行。": "After receiving and inspecting the product, we will explain warranty eligibility, the proposed work and any applicable charges. Paid repairs will proceed only with your approval.",
   "維修完成後安排寄回。寄送方式及運費分擔，會依個案在寄送前確認。": "We will arrange return shipping after the repair. Shipping methods and responsibility for shipping costs will be confirmed for each case before shipment.",
+  "書寫使用協助": "Help with your writing experience",
+  "收到商品並使用後，若有筆尖刮紙、出墨不順、斷墨或其他書寫問題，歡迎透過 Email 或 LINE 與我們聯繫。我們會先與您詳談使用狀況，並視需要安排寄回檢查與調整；請先聯絡我們再寄送。": "After receiving and trying your pen, please contact us by email or LINE if the nib feels scratchy, ink flow is inconsistent, the pen skips, or you have other writing concerns. We will discuss your writing conditions with you and arrange a return for inspection and adjustment if needed. Please contact us before sending your pen.",
   "保固與維修": "Warranty & Repairs",
   "商品保固期間為自出廠日期起一年。出廠日期載於隨貨附上的保固卡，並於出貨通知 Email 中提供，請妥善保留。申請保固或維修時，請提供訂單編號、保固卡及問題說明；處理範圍、方式及寄送安排，將依商品狀況與保固內容確認。": "The warranty lasts one year from the factory date shown on the warranty card included with your product and in your shipping notification email. Please retain the card. For warranty or repair requests, provide your order number, warranty card and a description of the issue. Coverage, handling and shipping arrangements will be confirmed based on the product's condition and warranty terms.",
   "聯絡 WUGONG": "Contact WUGONG",

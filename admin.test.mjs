@@ -50,7 +50,7 @@ test('order APIs require admin, paginate, restrict transitions, audit atomically
  assert.equal((await call('/api/admin/orders/ORDER00','GET',undefined,cookie)).data.order.total,120000);
  assert.equal((await call('/api/admin/orders/absent','GET',undefined,cookie)).status,404);
  assert.equal((await call('/api/admin/orders/%ZZ','GET',undefined,cookie)).status,400);
- sql.exec("UPDATE orders SET email='buyer@example.test' WHERE order_number='ORDER00'");
+ sql.exec("UPDATE orders SET email='buyer@example.test',items='[{\"category\":\"pen\",\"product\":\"Pen\",\"quantity\":1}]' WHERE order_number='ORDER00'");
  const change={orderNumber:'ORDER00',expectedStatus:'paid',status:'shipped',factoryDate:'2026-01-01'};
  assert.equal((await call('/api/order/status','POST',change,reg.cookie)).status,403);
  for(const headers of [{Origin:'https://evil.test'},{Origin:''},{'Sec-Fetch-Site':'cross-site'}])assert.equal((await call('/api/order/status','POST',change,cookie,headers)).status,403);
@@ -64,6 +64,7 @@ test('order APIs require admin, paginate, restrict transitions, audit atomically
  assert.equal((await call('/api/order/status','POST',change,cookie)).status,409);
  assert.equal(sql.prepare("SELECT count(*) n FROM admin_audit WHERE action='order.status'").get().n,1);
  assert.equal(sql.prepare("SELECT total FROM orders WHERE order_number='ORDER00'").get().total,120000);
+ const care=sql.prepare("SELECT * FROM order_notifications WHERE id='buyer-care/ORDER00'").get();assert.ok(care);assert.equal(care.next_attempt-Date.parse(care.created_at),5*86400000);assert.equal(care.attempts,0);
  assert.equal(sql.prepare("SELECT count(*) n FROM order_notifications WHERE id='buyer-shipped/ORDER00'").get().n,1);
  assert.deepEqual(JSON.parse(sql.prepare("SELECT payload FROM order_notifications WHERE id='buyer-shipped/ORDER00'").get().payload).to,['buyer@example.test']);
  assert.equal((await call('/api/admin/order/status','POST',{...change,expectedStatus:'shipped',status:'completed'},cookie)).status,200);
