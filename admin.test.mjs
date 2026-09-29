@@ -80,3 +80,16 @@ test('admin login throttles password guesses without revealing account existence
  for(let i=0;i<8;i++)assert.equal((await call('/api/admin/login','POST',{email:'absent@example.test',password:'wrong password'})).status,401);
  assert.equal((await call('/api/admin/login','POST',{email:'absent@example.test',password:'wrong password'})).status,429);sql.close();
 });
+
+test('buyer preview route requires administrator, validates addresses and deduplicates all six notices',async()=>{
+ const {sql,call}=setup();const credentials={email:'preview-owner@example.test',password:'long administrator test password',name:'Owner',birthday:'1990-01-01',country:'TW'};
+ const member=await call('/api/member/register','POST',credentials);sql.prepare('INSERT INTO admin_members VALUES (?,1,?)').run(member.data.member.id,new Date().toISOString());const {cookie}=await call('/api/admin/login','POST',credentials);
+ const request={kind:'buyer-preview',email:'preview@example.test',key:'preview-batch-00001'};
+ assert.equal((await call('/api/admin/order-notifications','POST',request,member.cookie)).status,403);
+ assert.equal((await call('/api/admin/order-notifications','POST',request,cookie,{Origin:'https://evil.test'})).status,403);
+ assert.equal((await call('/api/admin/order-notifications','POST',{...request,email:'bad'},cookie)).status,400);
+ const sent=await call('/api/admin/order-notifications','POST',request,cookie);assert.equal(sent.status,200);assert.equal(sent.data.notifications.length,6);assert.ok(sent.data.notifications.every(n=>n.kind==='buyer_preview'));
+ assert.equal((await call('/api/admin/order-notifications','POST',request,cookie)).status,200);assert.equal(sql.prepare('SELECT count(*) n FROM order_notifications').get().n,6);
+ for(const {payload}of sql.prepare('SELECT payload FROM order_notifications').all()){const p=JSON.parse(payload);assert.deepEqual(p.to,['preview@example.test']);assert.match(p.subject,/內容預覽/);assert.ok(!p.text.includes('測試'));}
+ assert.equal(sql.prepare('SELECT count(*) n FROM orders').get().n,0);sql.close();
+});

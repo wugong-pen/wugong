@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {CARE_DELAY_MS,careNotificationPayload,careNotificationStatements,validateFactoryDate,buyerNotificationPayload,buyerNotificationStatement,notificationSchema,notificationStatement,notificationPayload,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
+import {buyerEmailPreviews,memberEmailPayload,CARE_DELAY_MS,careNotificationPayload,careNotificationStatements,validateFactoryDate,buyerNotificationPayload,buyerNotificationStatement,notificationSchema,notificationStatement,notificationPayload,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
 function setup(){const sql=new DatabaseSync(':memory:');const DB={prepare(q){let p=[];return{bind(...v){p=v;return this;},async first(){return sql.prepare(q).get(...p)||null;},async all(){return{results:sql.prepare(q).all(...p)};},async run(){return{meta:{changes:sql.prepare(q).run(...p).changes}};}};}};return{sql,env:{DB,APP_ENV:'staging',RESEND_API_KEY:'fake-test-only',MAIL_FROM:'WUGONG <test@example.test>',MAIL_ORIGIN:'https://shop.example.test'}};}
 const order={order_number:'WG-NOTIFY-1',created_at:'2026-09-25T00:00:00.000Z',email:'buyer@example.test',country:'JP',items:[{product:'<img src=x>',quantity:1}],total:10500,payment:'paypal_invoice'};
 test('notification is a fixed recipient plain-text order snapshot with authenticated link',()=>{const {env}=setup(),p=notificationPayload(env,order);assert.deepEqual(p.to,['wugong.pen@gmail.com']);assert.equal(p.html,undefined);assert.match(p.text,/10500/);assert.match(p.text,/不代表買家已付款/);assert.match(p.text,/admin-order-detail.html\?order=WG-NOTIFY-1/);assert.match(p.subject,/測試訂單/);});
@@ -13,7 +13,7 @@ test('test notification sends no customer data or real order',async()=>{const {s
 
 test('buyer confirmations are bilingual, distinguish invoice from payment, and omit private notes',()=>{
  const {env,sql}=setup();const p=buyerNotificationPayload(env,{...order,note:'SECRET'},'confirmed');
- assert.deepEqual(p.to,[order.email]);assert.equal(p.reply_to,'wugong.pen@gmail.com');assert.match(p.text,/separate PayPal invoice/);assert.match(p.text,/本信不是付款帳單/);assert.match(p.text,/Do not pay/);assert.ok(!p.text.includes('SECRET'));assert.equal(p.html,undefined);
+ assert.deepEqual(p.to,[order.email]);assert.equal(p.reply_to,'wugong.pen@gmail.com');assert.match(p.text,/separate PayPal invoice/);assert.match(p.text,/本信不是付款帳單/);assert.ok(!/測試|TEST NOTICE|Do not pay/.test(p.subject+p.text));assert.ok(!p.text.includes('SECRET'));assert.equal(p.html,undefined);
  const bank=buyerNotificationPayload({...env,APP_ENV:'production'},{...order,payment:'bank'},'confirmed');assert.match(bank.text,/does not confirm payment/);assert.ok(!bank.subject.includes('TEST'));
  const ship=buyerNotificationPayload(env,order,'shipped',{carrier:'郵局',tracking:'TRACK-1',admin_note:'SECRET'});assert.match(ship.text,/TRACK-1/);assert.match(ship.text,/Carrier: 郵局/);assert.ok(!ship.text.includes('SECRET'));sql.close();
 });
@@ -48,4 +48,13 @@ test('care suppresses cancelled orders and failed attempts retain the same paylo
  const pen={...order,items:[{category:'pen'}]};sql.prepare('INSERT INTO orders VALUES (?,?)').run(order.order_number,'cancelled');await careNotificationStatements(env,pen,'ship')[0].run();sql.exec('UPDATE order_notifications SET next_attempt=0');await drainNotifications(env,()=>{throw Error('must not send');});assert.equal(sql.prepare('SELECT state FROM order_notifications').get().state,'cancelled');
  const other={...pen,order_number:'SECOND'};sql.prepare('INSERT INTO orders VALUES (?,?)').run('SECOND','shipped');await careNotificationStatements(env,other,'ship')[0].run();sql.exec('UPDATE order_notifications SET next_attempt=0');const requests=[];
  await drainNotifications(env,async(u,o)=>{requests.push(o);throw Error('connection lost');});sql.exec('UPDATE order_notifications SET next_attempt=0');await drainNotifications(env,async(u,o)=>{requests.push(o);return Response.json({id:'care-retry'});});assert.equal(requests.length,2);assert.equal(requests[0].body,requests[1].body);assert.equal(requests[0].headers['Idempotency-Key'],requests[1].headers['Idempotency-Key']);sql.close();
+});
+
+test('all six buyer mail previews use formal bilingual templates without test language',()=>{const {env,sql}=setup();const mails=buyerEmailPreviews(env,'owner@example.test');assert.equal(mails.length,6);for(const p of mails){assert.deepEqual(p.to,['owner@example.test']);assert.ok(!/測試|TEST NOTICE|網站尚未開放正式收款/.test(p.subject+p.text));assert.match(p.subject,/內容預覽/);}for(const purpose of ['verify','reset']){const p=memberEmailPayload(env,'buyer@example.test',purpose,'https://shop.example/member#secure');assert.ok(!/測試/.test(p.subject));assert.match(p.text,/Do not share/);}sql.close();});
+
+test('legacy unattempted buyer notices lose test copy; uncertain old sends stop for review',async()=>{
+ const {env,sql}=setup();await notificationSchema(env);
+ const legacy={from:env.MAIL_FROM,to:[order.email],subject:'【測試 / TEST】WUGONG 出貨通知',text:'【測試通知】舊版說明\nTEST NOTICE: Old notice\n\n正式內容'};
+ for(const [id,attempts]of [['buyer-shipped/NEW',0],['buyer-shipped/OLD',1]])sql.prepare('INSERT INTO order_notifications(id,payload,created_at,attempts) VALUES (?,?,?,?)').run(id,JSON.stringify(legacy),new Date().toISOString(),attempts);
+ const sent=[];await drainNotifications(env,async(u,o)=>{sent.push(JSON.parse(o.body));return Response.json({id:'formal'});});assert.equal(sent.length,1);assert.equal(sent[0].text,'正式內容');assert.ok(!sent[0].subject.includes('測試'));assert.equal(sql.prepare("SELECT state FROM order_notifications WHERE id='buyer-shipped/OLD'").get().state,'attention');sql.close();
 });

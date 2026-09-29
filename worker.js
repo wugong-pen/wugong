@@ -1,5 +1,5 @@
 import {listGuides,manageGuides} from './nib-guide-store.js';
-import {factoryDateForOrder,buyerNotificationStatement,shipmentNotification,notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
+import {memberEmailPayload,queueBuyerEmailPreviews,factoryDateForOrder,buyerNotificationStatement,shipmentNotification,notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
 import {readInvoice,manageInvoice} from './manual-invoice.js';
 import {shippingRegions,shippingQuote,shippingStatements} from './shipping.js';
 import {firstGiftQuote,firstGiftStatements,firstSchema,giftPhone,giftNotice} from './first-purchase.js';
@@ -118,7 +118,7 @@ async function adminApi(request,env,url,ctx) {
   }
   if(path==='/api/admin/order-notifications'){
     if(method==='GET')return json({success:true,...await notificationStatus(env,url.searchParams.get('order'))});
-    if(method==='POST'){await rate(env,`notification-test:${m.id}`,3);await queueTestNotification(env);await drainNotifications(env);return json({success:true,...await notificationStatus(env)});}
+    if(method==='POST'){const d=await body(request);if(d.kind==='buyer-preview'){await rate(env,`buyer-preview:${m.id}`,3);await queueBuyerEmailPreviews(env,d.email,d.key,m.id);await drainNotifications(env);return json({success:true,...await notificationStatus(env)});}await rate(env,`notification-test:${m.id}`,3);await queueTestNotification(env);await drainNotifications(env);return json({success:true,...await notificationStatus(env)});}
   }
   if(path==='/api/admin/manual-invoice'){
     if(method==='GET')return json({success:true,invoice:await readInvoice(env,text(url.searchParams.get('order'),60,'訂單編號'))});
@@ -186,10 +186,8 @@ async function sendMemberEmail(env,m,purpose,url) {
     env.DB.prepare('INSERT INTO member_email_tokens(token_hash,member_id,purpose,password_snapshot,expires_at) VALUES (?,?,?,?,?)').bind(tokenHash,m.id,purpose,m.password_hash,now()+minutes*60)
   ]);
   const link=`${env.MAIL_ORIGIN}/member#${new URLSearchParams({action:purpose,token})}`;
-  const title=purpose==='reset'?'重設 WUGONG 會員密碼':'驗證 WUGONG 會員電子郵件';
-  const content=`${title}\n\n請開啟以下連結完成操作：\n${link}\n\n連結有效時間：${purpose==='reset'?'30 分鐘':'24 小時'}，只能使用一次。\n若您未申請此操作，請忽略此信。請勿將連結轉寄給他人。`;
   try {
-    const response=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${env.RESEND_API_KEY}`,'Content-Type':'application/json','Idempotency-Key':tokenHash},body:JSON.stringify({from:env.MAIL_FROM,to:[m.email],subject:(env.APP_ENV==='staging'?'【測試站】':'')+title,text:content}),signal:AbortSignal.timeout(10000)});
+    const response=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${env.RESEND_API_KEY}`,'Content-Type':'application/json','Idempotency-Key':tokenHash},body:JSON.stringify(memberEmailPayload(env,m.email,purpose,link)),signal:AbortSignal.timeout(10000)});
     if(!response.ok)throw new Error(`Mail provider status ${response.status}`);
     const result=await response.json();if(!result.id)throw new Error('Missing mail receipt');
   }catch{
