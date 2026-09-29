@@ -1,5 +1,5 @@
 import {listGuides,manageGuides} from './nib-guide-store.js';
-import {buyerNotificationStatement,shipmentNotification,notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
+import {factoryDateForOrder,buyerNotificationStatement,shipmentNotification,notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
 import {readInvoice,manageInvoice} from './manual-invoice.js';
 import {shippingRegions,shippingQuote,shippingStatements} from './shipping.js';
 import {firstGiftQuote,firstGiftStatements,firstSchema,giftPhone,giftNotice} from './first-purchase.js';
@@ -136,13 +136,13 @@ async function adminApi(request,env,url,ctx) {
   if(path.startsWith('/api/admin/orders/')&&method==='GET') {
     let number;try{number=decodeURIComponent(path.slice('/api/admin/orders/'.length));}catch{fail(400,'訂單編號不正確');}
     const order=await env.DB.prepare(base+' WHERE o.order_number=?').bind(text(number,60,'訂單編號')).first();
-    if(!order)fail(404,'找不到此訂單');return json({success:true,order:{...order,invoice:order.payment==='paypal_invoice'?await readInvoice(env,order.order_number):null}});
+    if(!order)fail(404,'找不到此訂單');return json({success:true,order:{...order,factory_date:await factoryDateForOrder(env,order.order_number),invoice:order.payment==='paypal_invoice'?await readInvoice(env,order.order_number):null}});
   }
   if((path==='/api/admin/order/status'||path==='/api/order/status')&&method==='POST') {
     await rate(env,`admin-update:${m.id}`,100);
     const data=await body(request),number=text(data.orderNumber,60,'訂單編號');
     // Payment/stock transitions belong exclusively to verified payment workflows.
-    if(!Object.keys(data).every(k=>['orderNumber','status','expectedStatus','invoiceCancelled'].includes(k)))fail(400,'不支援的訂單欄位');
+    if(!Object.keys(data).every(k=>['orderNumber','status','expectedStatus','invoiceCancelled','factoryDate'].includes(k)))fail(400,'不支援的訂單欄位');
     const transitions={paid:'shipped',shipped:'completed',...(env.APP_ENV==='staging'?{test_paid:'shipped'}:{})};
     await firstSchema(env);
     if(data.expectedStatus==='pending'&&data.status==='cancelled'){
@@ -163,7 +163,7 @@ async function adminApi(request,env,url,ctx) {
     }
     if(!Object.hasOwn(transitions,data.expectedStatus)||transitions[data.expectedStatus]!==data.status)fail(409,'只能將已付款訂單標記出貨，或將已出貨訂單標記完成');
     const id=crypto.randomUUID();
-    const shipment=data.status==='shipped'?await shipmentNotification(env,number,id):[];
+    const shipment=data.status==='shipped'?await shipmentNotification(env,number,id,data.factoryDate):[];
     const results=await env.DB.batch([
       env.DB.prepare('INSERT INTO admin_audit(id,member_id,action,order_number,previous_status,next_status,created_at) SELECT ?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM orders WHERE order_number=? AND status=?)').bind(id,m.id,'order.status',number,data.expectedStatus,data.status,new Date().toISOString(),number,data.expectedStatus),
       env.DB.prepare('UPDATE orders SET status=? WHERE order_number=? AND status=? AND EXISTS(SELECT 1 FROM admin_audit WHERE id=?)').bind(data.status,number,data.expectedStatus,id),
@@ -283,7 +283,7 @@ async function api(request,env,url,ctx) {
     const base='SELECT o.order_number,o.customer_name,o.phone,o.email,o.address,o.shipping,o.payment,o.note,o.items,o.total,o.status,o.created_at,mo.shipping_country,(SELECT state FROM checkout_reservations WHERE order_number=o.order_number) AS reservation_state,(SELECT expires_at FROM checkout_reservations WHERE order_number=o.order_number) AS reserved_until FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE mo.member_id=?';
     if(path!=='/api/member/orders') {
       const order=await env.DB.prepare(base+' AND o.order_number=?').bind(m.id,decodeURIComponent(path.slice('/api/member/orders/'.length))).first();
-      if(!order)fail(404,'找不到此訂單');return json({success:true,order:{...order,invoice:order.payment==='paypal_invoice'?await readInvoice(env,order.order_number):null}});
+      if(!order)fail(404,'找不到此訂單');return json({success:true,order:{...order,factory_date:await factoryDateForOrder(env,order.order_number),invoice:order.payment==='paypal_invoice'?await readInvoice(env,order.order_number):null}});
     }
     const page=Math.floor(Math.max(1,Math.min(100000,Number(url.searchParams.get('page'))||1)));
     const result=await env.DB.prepare(base+' ORDER BY o.id DESC LIMIT 21 OFFSET ?').bind(m.id,(page-1)*20).all();

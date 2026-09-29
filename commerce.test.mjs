@@ -272,7 +272,7 @@ test('first gifts are held until administrator completes, never touch gift stock
  assert.equal((await call('/api/payments/start','POST',{orderNumber:number2},'member')).status,200);
  const row=sql.prepare('SELECT * FROM orders WHERE order_number=?').get(number2);await settlePayment(env,row,'paypal','gift-test-transaction');
  assert.equal((await firstGiftForOrder(env,number2)).state,'reserved');
- assert.equal((await call('/api/admin/order/status','POST',{orderNumber:number2,expectedStatus:'test_paid',status:'shipped'})).status,200);
+ assert.equal((await call('/api/admin/order/status','POST',{orderNumber:number2,expectedStatus:'test_paid',status:'shipped',factoryDate:'2026-01-01'})).status,200);
  assert.equal((await firstGiftForOrder(env,number2)).state,'reserved');
  sql.exec("CREATE TRIGGER gift_audit_failure BEFORE INSERT ON admin_audit BEGIN SELECT RAISE(ABORT,'audit failure'); END");
  const complete={orderNumber:number2,expectedStatus:'shipped',status:'completed'};

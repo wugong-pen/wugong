@@ -4,6 +4,15 @@ export function notificationConfigured(env){try{return !!(env.RESEND_API_KEY&&en
 export async function notificationSchema(env){
  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS order_notifications(id TEXT PRIMARY KEY,order_number TEXT UNIQUE,payload TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',attempts INTEGER NOT NULL DEFAULT 0,first_attempt INTEGER, next_attempt INTEGER NOT NULL DEFAULT 0,lease_until INTEGER NOT NULL DEFAULT 0,claim TEXT,provider_id TEXT,last_error TEXT,created_at TEXT NOT NULL,sent_at TEXT)`).run();
 }
+export async function factoryDateForOrder(env,number){
+ await env.DB.prepare('CREATE TABLE IF NOT EXISTS order_factory_dates(order_number TEXT PRIMARY KEY,factory_date TEXT NOT NULL)').run();
+ return (await env.DB.prepare('SELECT factory_date FROM order_factory_dates WHERE order_number=?').bind(number).first())?.factory_date||'';
+}
+export function validateFactoryDate(value){
+ const today=new Date(Date.now()+8*3600000).toISOString().slice(0,10);
+ if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)||!Number.isFinite(Date.parse(value+'T00:00:00Z'))||new Date(value+'T00:00:00Z').toISOString().slice(0,10)!==value||value<'1900-01-01'||value>today)throw Object.assign(new Error('請填寫有效的出廠日期，且不得晚於今天'),{status:400});
+ return value;
+}
 export function notificationPayload(env,order){
  const link=(env.MAIL_ORIGIN||FALLBACK_ORIGIN)+'/admin-order-detail.html?order='+encodeURIComponent(order.order_number);
  const lines=order.items.map(i=>`${i.product}${i.nib?' / '+i.nib:''} × ${i.quantity}`).join('\n');
@@ -50,7 +59,7 @@ export function buyerNotificationPayload(env,order,event,shipping={}) {
  const payment=order.payment==='paypal_invoice'
   ?'請等待我們確認商品與運費，再由專人另寄 PayPal 帳單至您的 Email。收到帳單前無需付款；本信不是付款帳單。\nPlease wait while we confirm your items and shipping. We will email a separate PayPal invoice. No payment is required before you receive it; this email is not an invoice.'
   :'下單不代表付款完成，請依結帳頁或會員購買紀錄確認付款狀態。\nPlacing an order does not confirm payment. Please check the checkout page or your purchase history for payment status.';
- const shippingText=`物流公司 / Carrier: ${shipping.carrier||'請回覆本信洽詢 / Reply to this email for details'}\n物流單號 / Tracking number: ${shipping.tracking||'尚未提供，請回覆本信洽詢 / Not yet available; reply to this email for details'}\n物流追蹤資訊可能稍後才會更新。\nTracking information may take time to appear.`;
+ const shippingText=`${shipping.factory_date?'出廠日期 / Factory date: '+shipping.factory_date+'\n保固期間：自出廠日期起一年，請妥善保留隨貨保固卡。\nWarranty: One year from the factory date. Please retain the warranty card included with your product.\n\n':''}物流公司 / Carrier: ${shipping.carrier||'請回覆本信洽詢 / Reply to this email for details'}\n物流單號 / Tracking number: ${shipping.tracking||'尚未提供，請回覆本信洽詢 / Not yet available; reply to this email for details'}\n物流追蹤資訊可能稍後才會更新。\nTracking information may take time to appear.`;
  return {from:env.MAIL_FROM||'WUGONG <noreply@mail.wugong-pen.com>',to:[order.email],reply_to:ADMIN_EMAIL,
  subject:(test?'【測試 / TEST】':'')+'WUGONG '+(shipped?'出貨通知 / Shipping notification ':'下單確認 / Order confirmation ')+order.order_number,
  text:`${test?'【測試通知】網站尚未開放正式收款；請勿付款。本信不代表實際出貨。\nTEST NOTICE: Live payments are unavailable. Do not pay. This email does not confirm a real shipment.\n\n':''}${shipped?'您的訂單已標記為出貨。\nYour order has been marked as shipped.':'我們已收到您的訂單，謝謝您的選購。\nThank you. We have received your order.'}\n\n訂單編號 / Order number: ${order.order_number}\n\n${lines}\n\n訂單總額（含運費）/ Total including shipping: NT$${order.total}\n\n${shipped?shippingText:payment}\n\n登入會員查看購買紀錄 / Sign in to view purchase history:\n${env.MAIL_ORIGIN||FALLBACK_ORIGIN}/member.html\n\n如有疑問，請回覆本信並提供訂單編號。\nFor assistance, reply with your order number.\n${ADMIN_EMAIL}`};
@@ -60,10 +69,13 @@ export function buyerNotificationStatement(env,order,event,auditId=null,shipping
  const values=[id,JSON.stringify(payload),new Date().toISOString()];
  return auditId===null?env.DB.prepare('INSERT INTO order_notifications(id,payload,created_at) VALUES (?,?,?)').bind(...values):env.DB.prepare('INSERT INTO order_notifications(id,payload,created_at) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM admin_audit WHERE id=?)').bind(...values,auditId);
 }
-export async function shipmentNotification(env,number,auditId){
+export async function shipmentNotification(env,number,auditId,factoryDate){
+ validateFactoryDate(factoryDate);
+ await factoryDateForOrder(env,number);
+ const dateStatement=env.DB.prepare('INSERT INTO order_factory_dates(order_number,factory_date) SELECT ?,? WHERE EXISTS(SELECT 1 FROM admin_audit WHERE id=?) ON CONFLICT(order_number) DO UPDATE SET factory_date=excluded.factory_date').bind(number,factoryDate,auditId);
  const order=await env.DB.prepare('SELECT * FROM orders WHERE order_number=?').bind(number).first();
- if(!order?.email)return []; // Legacy orders may have no buyer email.
+ if(!order?.email)return [dateStatement]; // Legacy orders may have no buyer email.
  let shipping={};try{shipping=await env.DB.prepare('SELECT carrier,tracking FROM order_management WHERE order_number=?').bind(number).first()||{};}catch(e){if(!String(e.message).includes('no such table: order_management'))throw e;}
  await notificationSchema(env);
- return [buyerNotificationStatement(env,order,'shipped',auditId,shipping)];
+ return [dateStatement,buyerNotificationStatement(env,order,'shipped',auditId,{...shipping,factory_date:factoryDate})];
 }

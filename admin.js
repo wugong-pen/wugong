@@ -30,11 +30,12 @@ async function loadOrders(){
 }
 async function loadDetail(){
  message('正在讀取訂單…');$('content').replaceChildren();$('advance').hidden=true;
- document.getElementById('cancel-order')?.remove();document.getElementById('cancel-confirmation')?.remove();
+ document.getElementById('factory-date-panel')?.remove();document.getElementById('cancel-order')?.remove();document.getElementById('cancel-confirmation')?.remove();
  try{const number=new URLSearchParams(location.search).get('order');if(!number)throw new Error('缺少訂單編號');
   const {order:o}=await api('/api/admin/orders/'+encodeURIComponent(number));currentOrder=o;
   const dl=node('dl');for(const [label,value] of [['訂單編號',o.order_number],['姓名',o.customer_name],['電話',o.phone],['電子郵件',o.email],['收件國家',o.shipping_country||'未記錄'],['收件地址',o.address],['商品',items(o.items)],['金額',money(o.total)],['付款方式',payments[o.payment]||o.payment],['配送方式',o.shipping],['狀態',labels[o.status]||o.status],['備註',o.note||'無'],['下單時間',date(o.created_at)]])dl.append(node('dt',label),node('dd',value));$('content').append(dl);
   if(['paid','test_paid','shipped'].includes(o.status)){$('advance').textContent=o.status!=='shipped'?'標記為已出貨':'標記為已完成';$('advance').hidden=false;}
+  const factoryPanel=node('section');factoryPanel.id='factory-date-panel';factoryPanel.className='card';const factoryLabel=node('label','出廠日期（請與隨貨保固卡一致）'),factoryInput=node('input');factoryInput.type='date';factoryInput.id='factory-date';factoryInput.value=o.factory_date||'';factoryInput.max=new Date(Date.now()+8*3600000).toISOString().slice(0,10);factoryInput.required=true;factoryInput.disabled=!['paid','test_paid'].includes(o.status);factoryLabel.append(factoryInput);factoryPanel.append(factoryLabel,node('p','保固期間：自出廠日期起一年。標記出貨時儲存，並寫入買家出貨通知信。'));$('advance').before(factoryPanel);
   message('');
   await orderManagement(o.order_number);
   await (await import('./admin-notifications.js')).renderNotifications({api,node,order:o.order_number});
@@ -57,7 +58,7 @@ if(document.body.dataset.page==='login'){
    await (await import('./admin-notifications.js')).renderNotifications({api,node});
    const search=node('form');search.className='search-form';const input=node('input');input.id='order-search';input.placeholder='搜尋訂單編號、收件人或信箱';input.maxLength=100;input.setAttribute('aria-label','搜尋訂單');const select=node('select');select.id='order-status';select.setAttribute('aria-label','訂單狀態');for(const [v,label]of [['','全部狀態'],...Object.entries(labels)]){const option=node('option',label);option.value=v;select.append(option);}const submit=node('button','篩選');search.append(input,select,submit);$('message').after(search);search.onsubmit=e=>{e.preventDefault();page=1;loadOrders();};
    $('refresh').onclick=loadOrders;$('previous').onclick=()=>{page--;loadOrders();};$('next').onclick=()=>{page++;loadOrders();};await loadOrders();}
-  else{$('advance').onclick=async()=>{const button=$('advance');button.disabled=true;try{await api('/api/admin/order/status','POST',{orderNumber:currentOrder.order_number,expectedStatus:currentOrder.status,status:currentOrder.status!=='shipped'?'shipped':'completed'});await loadDetail();}catch(e){await loadDetail();message(e.message);}finally{button.disabled=false;}};await loadDetail();}
+  else{$('advance').onclick=async()=>{const button=$('advance');button.disabled=true;try{if(currentOrder.status!=='shipped'&&!$('factory-date').reportValidity())return;await api('/api/admin/order/status','POST',{factoryDate:$('factory-date')?.value||'',orderNumber:currentOrder.order_number,expectedStatus:currentOrder.status,status:currentOrder.status!=='shipped'?'shipped':'completed'});await loadDetail();}catch(e){await loadDetail();message(e.message);}finally{button.disabled=false;}};await loadDetail();}
  }catch(e){message(e.message);}
 }
 async function orderManagement(number){

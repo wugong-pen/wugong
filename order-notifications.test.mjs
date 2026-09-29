@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {buyerNotificationPayload,buyerNotificationStatement,notificationSchema,notificationStatement,notificationPayload,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
+import {validateFactoryDate,buyerNotificationPayload,buyerNotificationStatement,notificationSchema,notificationStatement,notificationPayload,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
 function setup(){const sql=new DatabaseSync(':memory:');const DB={prepare(q){let p=[];return{bind(...v){p=v;return this;},async first(){return sql.prepare(q).get(...p)||null;},async all(){return{results:sql.prepare(q).all(...p)};},async run(){return{meta:{changes:sql.prepare(q).run(...p).changes}};}};}};return{sql,env:{DB,APP_ENV:'staging',RESEND_API_KEY:'fake-test-only',MAIL_FROM:'WUGONG <test@example.test>',MAIL_ORIGIN:'https://shop.example.test'}};}
 const order={order_number:'WG-NOTIFY-1',created_at:'2026-09-25T00:00:00.000Z',email:'buyer@example.test',country:'JP',items:[{product:'<img src=x>',quantity:1}],total:10500,payment:'paypal_invoice'};
 test('notification is a fixed recipient plain-text order snapshot with authenticated link',()=>{const {env}=setup(),p=notificationPayload(env,order);assert.deepEqual(p.to,['wugong.pen@gmail.com']);assert.equal(p.html,undefined);assert.match(p.text,/10500/);assert.match(p.text,/不代表買家已付款/);assert.match(p.text,/admin-order-detail.html\?order=WG-NOTIFY-1/);assert.match(p.subject,/測試訂單/);});
@@ -25,3 +25,5 @@ test('buyer events coexist with administrator notification and retry without cha
  const requests=[];await drainNotifications(env,async(u,o)=>{requests.push(o);throw Error('timeout');});sql.exec('UPDATE order_notifications SET next_attempt=0');await drainNotifications(env,async(u,o)=>{requests.push(o);return Response.json({id:'receipt'});});
  for(const id of ['new-order/','buyer-confirmed/','buyer-shipped/']){const sent=requests.filter(r=>r.headers['Idempotency-Key']===id+order.order_number);assert.equal(sent.length,2);assert.equal(sent[0].body,sent[1].body);}sql.close();
 });
+
+test('factory dates reject invalid calendar dates and shipment email states one-year warranty',()=>{for(const d of ['', '2026-02-30','2100-01-01','bad'])assert.throws(()=>validateFactoryDate(d));assert.equal(validateFactoryDate('2024-02-29'),'2024-02-29');const {env,sql}=setup();const p=buyerNotificationPayload(env,order,'shipped',{factory_date:'2026-01-01'});assert.match(p.text,/Factory date: 2026-01-01/);assert.match(p.text,/One year from the factory date/);sql.close();});

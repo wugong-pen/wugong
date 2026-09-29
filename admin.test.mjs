@@ -51,13 +51,16 @@ test('order APIs require admin, paginate, restrict transitions, audit atomically
  assert.equal((await call('/api/admin/orders/absent','GET',undefined,cookie)).status,404);
  assert.equal((await call('/api/admin/orders/%ZZ','GET',undefined,cookie)).status,400);
  sql.exec("UPDATE orders SET email='buyer@example.test' WHERE order_number='ORDER00'");
- const change={orderNumber:'ORDER00',expectedStatus:'paid',status:'shipped'};
+ const change={orderNumber:'ORDER00',expectedStatus:'paid',status:'shipped',factoryDate:'2026-01-01'};
  assert.equal((await call('/api/order/status','POST',change,reg.cookie)).status,403);
  for(const headers of [{Origin:'https://evil.test'},{Origin:''},{'Sec-Fetch-Site':'cross-site'}])assert.equal((await call('/api/order/status','POST',change,cookie,headers)).status,403);
  for(const status of ['paid','test_paid','cancelled','refunded','__proto__'])assert.equal((await call('/api/order/status','POST',{...change,status},cookie)).status,409);
  assert.equal((await call('/api/order/status','POST',{...change,total:1},cookie)).status,400);
  assert.equal((await call('/api/order/status','POST',{...change,orderNumber:'ORDER01'},cookie)).status,409);
+ assert.equal((await call('/api/order/status','POST',{...change,factoryDate:''},cookie)).status,400);
  assert.equal((await call('/api/order/status','POST',change,cookie)).status,200);
+ assert.equal(sql.prepare("SELECT factory_date FROM order_factory_dates WHERE order_number='ORDER00'").get().factory_date,'2026-01-01');
+ assert.match(JSON.parse(sql.prepare("SELECT payload FROM order_notifications WHERE id='buyer-shipped/ORDER00'").get().payload).text,/Factory date: 2026-01-01/);
  assert.equal((await call('/api/order/status','POST',change,cookie)).status,409);
  assert.equal(sql.prepare("SELECT count(*) n FROM admin_audit WHERE action='order.status'").get().n,1);
  assert.equal(sql.prepare("SELECT total FROM orders WHERE order_number='ORDER00'").get().total,120000);
