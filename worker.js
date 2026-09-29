@@ -1,5 +1,5 @@
 import {listGuides,manageGuides} from './nib-guide-store.js';
-import {memberEmailPayload,queueBuyerEmailPreviews,factoryDateForOrder,buyerNotificationStatement,shipmentNotification,notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
+import {annualUnsubscribe,queueNewYearGreetings,queueNewYearPreview,memberEmailPayload,queueBuyerEmailPreviews,factoryDateForOrder,buyerNotificationStatement,shipmentNotification,notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
 import {readInvoice,manageInvoice} from './manual-invoice.js';
 import {shippingRegions,shippingQuote,shippingStatements} from './shipping.js';
 import {firstGiftQuote,firstGiftStatements,firstSchema,giftPhone,giftNotice} from './first-purchase.js';
@@ -118,7 +118,7 @@ async function adminApi(request,env,url,ctx) {
   }
   if(path==='/api/admin/order-notifications'){
     if(method==='GET')return json({success:true,...await notificationStatus(env,url.searchParams.get('order'))});
-    if(method==='POST'){const d=await body(request);if(d.kind==='buyer-preview'){await rate(env,`buyer-preview:${m.id}`,3);await queueBuyerEmailPreviews(env,d.email,d.key,m.id);await drainNotifications(env);return json({success:true,...await notificationStatus(env)});}await rate(env,`notification-test:${m.id}`,3);await queueTestNotification(env);await drainNotifications(env);return json({success:true,...await notificationStatus(env)});}
+    if(method==='POST'){const d=await body(request);if(d.kind==='newyear-preview'){await rate(env,`newyear-preview:${m.id}`,3);await queueNewYearPreview(env,d.email,d.key,m.id);await drainNotifications(env);return json({success:true,...await notificationStatus(env)});}if(d.kind==='buyer-preview'){await rate(env,`buyer-preview:${m.id}`,3);await queueBuyerEmailPreviews(env,d.email,d.key,m.id);await drainNotifications(env);return json({success:true,...await notificationStatus(env)});}await rate(env,`notification-test:${m.id}`,3);await queueTestNotification(env);await drainNotifications(env);return json({success:true,...await notificationStatus(env)});}
   }
   if(path==='/api/admin/manual-invoice'){
     if(method==='GET')return json({success:true,invoice:await readInvoice(env,text(url.searchParams.get('order'),60,'訂單編號'))});
@@ -342,12 +342,13 @@ async function api(request,env,url,ctx) {
   fail(404,'找不到此功能');
 }
 export default {
-  async scheduled(event,env){await drainNotifications(env);if(env.APP_ENV==='staging'){await expireReservations(env);await reconcilePayments(env);}},
+  async scheduled(event,env){await queueNewYearGreetings(env);await drainNotifications(env);if(env.APP_ENV==='staging'){await expireReservations(env);await reconcilePayments(env);}},
   async fetch(request,env,ctx) {
     const url=new URL(request.url);
     try{
       let response;
-      if(url.pathname==='/'&&url.searchParams.get('homepage-preview')==='1'&&!await adminSession(request,env,false))response=new Response(null,{status:303,headers:{Location:'/admin-login.html','Cache-Control':'no-store'}});
+      if(url.pathname==='/annual-greetings/unsubscribe')response=await annualUnsubscribe(request,env);
+      else if(url.pathname==='/'&&url.searchParams.get('homepage-preview')==='1'&&!await adminSession(request,env,false))response=new Response(null,{status:303,headers:{Location:'/admin-login.html','Cache-Control':'no-store'}});
       else if(url.pathname.startsWith('/media/'))response=await publicCommerce(request,env,url)||new Response(null,{status:404});
       else if(url.pathname.startsWith('/api/'))response=await api(request,env,url,ctx);
       else if((/^\/admin(?:\/|$)/i.test(url.pathname)||/^\/admin-(?!login(?:\.html)?\/?$)[^/.]+(?:\.html)?\/?$/i.test(url.pathname))&&!await adminSession(request,env,false))response=new Response(null,{status:303,headers:{Location:'/admin-login.html','Cache-Control':'no-store'}});

@@ -31,6 +31,7 @@ export async function drainNotifications(env,send=fetch){
   try{
    if(/^buyer-(confirmed|shipped|care)\//.test(id)){const p=JSON.parse(row.payload);if(p.subject.startsWith('【測試 / TEST】')){if(row.attempts>1){await env.DB.prepare("UPDATE order_notifications SET state='attention',lease_until=0,last_error='舊版信件曾嘗試寄送，請人工核對結果' WHERE id=? AND claim=?").bind(id,claim).run();continue;}p.subject=p.subject.replace('【測試 / TEST】','');p.text=p.text.replace(/^【測試通知】[\s\S]*?\n\n/,'');row.payload=JSON.stringify(p);await env.DB.prepare('UPDATE order_notifications SET payload=? WHERE id=? AND claim=?').bind(row.payload,id,claim).run();}}
    if(id.startsWith('buyer-care/')){const current=await env.DB.prepare('SELECT status FROM orders WHERE order_number=?').bind(id.slice('buyer-care/'.length)).first();if(!current||!['shipped','completed'].includes(current.status)){await env.DB.prepare("UPDATE order_notifications SET state='cancelled',lease_until=0,last_error='訂單已不適用出貨關懷，停止寄送' WHERE id=? AND claim=?").bind(id,claim).run();continue;}}
+   if(id.startsWith('buyer-newyear/')){const [,year,token]=id.split('/');if(!await newYearRecipient(env,token,Number(year))){await env.DB.prepare("UPDATE order_notifications SET state='cancelled',lease_until=0,last_error='已停止年度問候或已無符合條件的購買紀錄' WHERE id=? AND claim=?").bind(id,claim).run();continue;}}
    const response=await send('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+env.RESEND_API_KEY,'Content-Type':'application/json','Idempotency-Key':row.id},body:row.payload,signal:AbortSignal.timeout(10000)});
    if(!response.ok)throw Error('寄信服務回應 '+response.status);
    const receipt=await response.json();if(typeof receipt.id!=='string'||!receipt.id)throw Error('寄信服務未回傳收件編號');
@@ -44,7 +45,7 @@ export async function drainNotifications(env,send=fetch){
 export async function notificationStatus(env,number){
  await notificationSchema(env);
  const rows=await env.DB.prepare('SELECT id,order_number,state,attempts,next_attempt,last_error,created_at,sent_at FROM order_notifications WHERE (? IS NULL OR order_number=? OR id=? OR id=? OR id=?) ORDER BY created_at DESC LIMIT 10').bind(number||null,number||null,'buyer-confirmed/'+number,'buyer-shipped/'+number,'buyer-care/'+number).all();
- return {recipient:ADMIN_EMAIL,configured:notificationConfigured(env),notifications:rows.results.map(r=>({...r,order_number:r.order_number||(r.id.startsWith('buyer-preview/')?'內容預覽':r.id.startsWith('buyer-')?r.id.split('/')[1]:null),kind:r.id.startsWith('buyer-preview/')?'buyer_preview':r.id.startsWith('buyer-care/')?'buyer_care':r.id.startsWith('buyer-shipped/')?'buyer_shipped':r.id.startsWith('buyer-confirmed/')?'buyer_confirmed':'admin'}))};
+ return {recipient:ADMIN_EMAIL,configured:notificationConfigured(env),notifications:rows.results.map(r=>({...r,order_number:r.order_number||(/^(buyer-preview|newyear-preview)\//.test(r.id)?'內容預覽':r.id.startsWith('buyer-newyear/')?r.id.split('/')[1]+' 新年問候':r.id.startsWith('buyer-')?r.id.split('/')[1]:null),kind:r.id.startsWith('newyear-preview/')?'newyear_preview':r.id.startsWith('buyer-newyear/')?'buyer_newyear':r.id.startsWith('buyer-preview/')?'buyer_preview':r.id.startsWith('buyer-care/')?'buyer_care':r.id.startsWith('buyer-shipped/')?'buyer_shipped':r.id.startsWith('buyer-confirmed/')?'buyer_confirmed':'admin'}))};
 }
 export async function queueTestNotification(env){
  await notificationSchema(env);const id='notification-test/'+crypto.randomUUID();
@@ -110,4 +111,59 @@ export async function queueBuyerEmailPreviews(env,email,key,adminId){
  const existing=await env.DB.prepare('SELECT payload FROM order_notifications WHERE id=?').bind(prefix+'0').first();
  if(existing){if(JSON.parse(existing.payload).to[0]!==email)throw Object.assign(new Error('此寄送編號已用於另一信箱，請重新整理'),{status:409});return;}
  await env.DB.batch(buyerEmailPreviews(env,email).map((p,i)=>env.DB.prepare('INSERT INTO order_notifications(id,payload,created_at) VALUES (?,?,?) ON CONFLICT(id) DO NOTHING').bind(prefix+i,JSON.stringify(p),new Date().toISOString())));
+}
+
+// The existing five-minute cron checks Taipei's calendar; no browser or app must remain open.
+export async function newYearSchema(env){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS annual_greeting_preferences(email TEXT PRIMARY KEY,token TEXT NOT NULL UNIQUE,enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)))").run();
+}
+const newYearBuyers=`SELECT DISTINCT lower(trim(m.email)) AS email FROM members m
+ JOIN member_orders mo ON mo.member_id=m.id JOIN orders o ON o.order_number=mo.order_number
+ WHERE m.active=1 AND o.status IN ('shipped','completed') AND o.created_at<?
+ AND NOT EXISTS(SELECT 1 FROM admin_audit a WHERE a.order_number=o.order_number AND (a.previous_status='test_paid' OR a.next_status='test_paid'))`;
+const yearCutoff=year=>`${year-1}-12-31T16:00:00.000Z`;
+async function newYearRecipient(env,token,year){
+ return env.DB.prepare(`SELECT p.email FROM annual_greeting_preferences p WHERE p.token=? AND p.enabled=1 AND p.email IN (${newYearBuyers})`).bind(token,yearCutoff(year)).first();
+}
+export function newYearPayload(env,email,year,token=''){
+ const stop=token?`停止年度問候 / Unsubscribe from annual greetings:\n${env.MAIL_ORIGIN||FALLBACK_ORIGIN}/annual-greetings/unsubscribe?token=${encodeURIComponent(token)}`:'（正式信件會附上停止年度問候連結；此預覽不含有效連結。 / Actual messages include an unsubscribe link; this preview has no active link.）';
+ return {from:env.MAIL_FROM||'WUGONG <noreply@mail.wugong-pen.com>',to:[email],reply_to:ADMIN_EMAIL,
+ subject:`WUGONG｜${year} 新年快樂，願美好隨筆而至 / Happy New Year`,
+ text:`親愛的朋友，新年快樂！\n\n謝謝您讓 WUGONG 的作品，陪伴您的書寫與生活。新的一年，願您與家人平安健康、心有所喜；願每一次落筆，都能記錄值得珍藏的時光，寫下屬於自己的美好篇章。\n\n也想關心，您的鋼筆最近使用得還順手嗎？筆尖是否有刮紙、出墨不順、斷墨，或其他想與我們聊聊的地方？無論是使用上的疑問，或是想分享一段書寫日常，都歡迎直接回覆這封信。\n\n若有需要協助的狀況，我們會先與您了解使用的墨水、紙張及書寫情形，再一起確認適合的處理方式；如需寄回檢查，請先與我們聯繫。\n\n祝福您在 ${year} 年，生活安好，靈感常在，所珍惜的人事物都能溫柔相伴。\n\nDear friend, Happy New Year!\n\nThank you for making WUGONG part of your writing and everyday life. May the year ahead bring you and your loved ones good health, peace and joy. May every page hold moments worth keeping and stories that are uniquely yours.\n\nHow has your fountain pen been writing lately? If the nib feels scratchy, the ink flow is uneven, or you notice any skipping, please reply and tell us. We are also always happy to hear about the moments you have enjoyed with your pen.\n\nIf you need help, we will discuss your ink, paper and writing conditions with you and work out the next step together. Please contact us before returning a pen for inspection.\n\nWishing you a peaceful, inspiring ${year}, filled with the people and things you cherish.\n\nWUGONG 吾鋼\n${ADMIN_EMAIL}\n\n${stop}\n停止年度問候不影響訂單、出貨及售後必要通知。\nUnsubscribing from annual greetings does not affect essential order, shipping or service notifications.`};
+}
+export async function queueNewYearGreetings(env,stamp=Date.now()){
+ const local=new Date(stamp+8*3600000);
+ if(local.getUTCMonth()!==0||local.getUTCDate()!==1||local.getUTCHours()<9||!notificationConfigured(env))return;
+ const year=local.getUTCFullYear();
+ await notificationSchema(env);await newYearSchema(env);
+ // Small batches keep the scheduled worker bounded and resume safely on the next tick.
+ const missing=await env.DB.prepare(`SELECT email FROM (${newYearBuyers}) b WHERE NOT EXISTS(SELECT 1 FROM annual_greeting_preferences p WHERE p.email=b.email) LIMIT 100`).bind(yearCutoff(year)).all();
+ if(missing.results.length)await env.DB.batch(missing.results.map(({email})=>env.DB.prepare('INSERT INTO annual_greeting_preferences(email,token) VALUES (?,?) ON CONFLICT(email) DO NOTHING').bind(email,crypto.randomUUID().replaceAll('-',''))));
+ const rows=await env.DB.prepare(`SELECT p.email,p.token FROM annual_greeting_preferences p WHERE p.enabled=1 AND p.email IN (${newYearBuyers}) AND NOT EXISTS(SELECT 1 FROM order_notifications n WHERE n.id=?||p.token) ORDER BY p.email LIMIT 100`).bind(yearCutoff(year),'buyer-newyear/'+year+'/').all();
+ if(rows.results.length)await env.DB.batch(rows.results.map(({email,token})=>env.DB.prepare('INSERT INTO order_notifications(id,payload,created_at) VALUES (?,?,?) ON CONFLICT(id) DO NOTHING').bind('buyer-newyear/'+year+'/'+token,JSON.stringify(newYearPayload(env,email,year,token)),new Date(stamp).toISOString())));
+}
+export async function queueNewYearPreview(env,email,key,adminId){
+ if(typeof email!=='string'||email.length>254||!/^\S+@[^\s@]+\.[^\s@]+$/.test(email)||typeof key!=='string'||!/^[a-zA-Z0-9-]{16,80}$/.test(key))throw Object.assign(new Error('請確認預覽收件信箱與寄送編號'),{status:400});
+ await notificationSchema(env);const id='newyear-preview/'+adminId+'/'+key;
+ const existing=await env.DB.prepare('SELECT payload FROM order_notifications WHERE id=?').bind(id).first();
+ if(existing){if(JSON.parse(existing.payload).to[0]!==email)throw Object.assign(new Error('此寄送編號已用於另一信箱，請重新整理'),{status:409});return;}
+ const local=new Date(Date.now()+8*3600000),year=local.getUTCFullYear()+(local.getUTCMonth()===0&&local.getUTCDate()===1?0:1);
+ const p=newYearPayload(env,email,year);p.subject='【內容預覽】'+p.subject;
+ await env.DB.prepare('INSERT INTO order_notifications(id,payload,created_at) VALUES (?,?,?) ON CONFLICT(id) DO NOTHING').bind(id,JSON.stringify(p),new Date().toISOString()).run();
+}
+export async function annualUnsubscribe(request,env){
+ const url=new URL(request.url),token=url.searchParams.get('token')||'';
+ const headers={'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"};
+ if(!/^[a-f0-9]{32}$/.test(token))return new Response('連結無效 / Invalid link',{status:400,headers});
+ if(!['GET','POST'].includes(request.method))return new Response('Method not allowed',{status:405,headers});
+ await newYearSchema(env);
+ const row=await env.DB.prepare('SELECT enabled FROM annual_greeting_preferences WHERE token=?').bind(token).first();
+ if(!row)return new Response('連結無效 / Invalid link',{status:404,headers});
+ // GET is a confirmation page: email scanners cannot unsubscribe a buyer by opening a link.
+ if(request.method==='POST'){
+  if(request.headers.get('Origin')!==url.origin)return new Response('請由確認頁送出 / Please use the confirmation page',{status:403,headers});
+  await env.DB.prepare('UPDATE annual_greeting_preferences SET enabled=0 WHERE token=?').bind(token).run();
+ }
+ const stopped=!row.enabled||request.method==='POST';
+ return new Response(`<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WUGONG 年度問候 / Annual greetings</title><body style="max-width:640px;margin:64px auto;padding:24px;font:18px/1.8 sans-serif"><h1>WUGONG 吾鋼</h1><h2>${stopped?'已停止年度問候 / Unsubscribed':'停止年度問候 / Unsubscribe'}</h2><p>${stopped?'您將不再收到每年新年問候。 / You will no longer receive our annual New Year greeting.':'確定不再收到每年新年問候嗎？ / Would you like to stop receiving our annual New Year greeting?'}</p><p>訂單、出貨及售後必要通知不受影響。<br>Essential order, shipping and service notifications are unaffected.</p>${stopped?'':`<form method="post"><button type="submit" style="padding:12px">確認停止年度問候 / Confirm unsubscribe</button></form>`}</body></html>`,{headers});
 }

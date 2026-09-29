@@ -93,3 +93,15 @@ test('buyer preview route requires administrator, validates addresses and dedupl
  for(const {payload}of sql.prepare('SELECT payload FROM order_notifications').all()){const p=JSON.parse(payload);assert.deepEqual(p.to,['preview@example.test']);assert.match(p.subject,/內容預覽/);assert.ok(!p.text.includes('測試'));}
  assert.equal(sql.prepare('SELECT count(*) n FROM orders').get().n,0);sql.close();
 });
+
+test('annual greeting preview is admin-only, CSRF-protected and idempotent without enrolling its recipient',async()=>{
+ const {sql,call}=setup();const credentials={email:'newyear-owner@example.test',password:'long administrator test password',name:'Owner',birthday:'1990-01-01',country:'TW'};
+ const member=await call('/api/member/register','POST',credentials);sql.prepare('INSERT INTO admin_members VALUES (?,1,?)').run(member.data.member.id,new Date().toISOString());const {cookie}=await call('/api/admin/login','POST',credentials);
+ const request={kind:'newyear-preview',email:'preview@example.test',key:'newyear-preview-00001'};
+ assert.equal((await call('/api/admin/order-notifications','POST',request,member.cookie)).status,403);
+ assert.equal((await call('/api/admin/order-notifications','POST',request,cookie,{Origin:'https://evil.test'})).status,403);
+ assert.equal((await call('/api/admin/order-notifications','POST',{...request,email:'bad'},cookie)).status,400);
+ const r=await call('/api/admin/order-notifications','POST',request,cookie);assert.equal(r.status,200);assert.equal(r.data.notifications.length,1);assert.equal(r.data.notifications[0].kind,'newyear_preview');
+ assert.equal((await call('/api/admin/order-notifications','POST',request,cookie)).status,200);assert.equal(sql.prepare('SELECT count(*) n FROM order_notifications').get().n,1);
+ assert.equal(sql.prepare('SELECT count(*) n FROM orders').get().n,0);assert.equal(sql.prepare("SELECT count(*) n FROM sqlite_master WHERE name='annual_greeting_preferences'").get().n,0);sql.close();
+});
