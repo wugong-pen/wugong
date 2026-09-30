@@ -15,14 +15,14 @@ async function api(path,method='GET',data){
 }
 function tab(register){$('forgotPasswordForm').hidden=true;$('loginForm').hidden=register;$('registerForm').hidden=!register;$('loginTab').setAttribute('aria-pressed',String(!register));$('registerTab').setAttribute('aria-pressed',String(register));message('');}
 function showAuth(){member=null;$('auth').hidden=false;$('account').hidden=true;$('checkoutNotice').hidden=!next;$('orders').replaceChildren();$('profileForm').reset();$('passwordForm').reset();}
-async function showAccount(m){member=m;$('auth').hidden=true;$('account').hidden=false;$('welcome').textContent=`${m.name}，您好`;$('accountEmail').textContent=m.email;$('emailStatus').textContent=m.emailVerified?'電子郵件已驗證':emailAvailable?'電子郵件尚未驗證，請查看信箱中的驗證信。':'電子郵件尚未驗證；寄信服務準備中。';$('resendVerification').hidden=m.emailVerified||!emailAvailable;$('continueCheckout').hidden=!next;for(const key of ['name','birthday','country','phone','address'])$('profileForm').elements[key].value=m[key]||'';await loadOrders(true);}
+async function showAccount(m){member=m;$('auth').hidden=true;$('account').hidden=false;$('welcome').textContent=`${m.name}，您好`;$('accountEmail').textContent=m.email;$('profileEmail').value=m.email;void loadNewsletter();$('emailStatus').textContent=m.emailVerified?'電子郵件已驗證':emailAvailable?'電子郵件尚未驗證，請查看信箱中的驗證信。':'電子郵件尚未驗證；寄信服務準備中。';$('resendVerification').hidden=m.emailVerified||!emailAvailable;$('continueCheckout').hidden=!next;for(const key of ['name','birthday','country','phone','address'])$('profileForm').elements[key].value=m[key]||'';await loadOrders(true);}
 function data(form){return Object.fromEntries(new FormData(form));}
 function submit(form,action){form.addEventListener('submit',async event=>{event.preventDefault();const button=form.querySelector('button[type=submit]');button.disabled=true;message('處理中…');try{await action(data(form));}catch(error){message(error.message||'連線失敗，請稍後再試',true);}finally{button.disabled=false;}});}
 function confirmPassword(d){if(d.password!==d.confirmPassword)throw new Error('兩次輸入的密碼不一致');}
 for(const select of document.querySelectorAll('select[name=country]'))countryOptions(select);
 for(const input of document.querySelectorAll('input[type=date]'))input.max=new Date().toISOString().slice(0,10);
 $('loginTab').addEventListener('click',()=>tab(false));$('registerTab').addEventListener('click',()=>tab(true));
-for(const [id,path]of [['loginForm','login'],['registerForm','register']])submit($(id),async d=>{if(path==='register')confirmPassword(d);const result=await api(`/api/member/${path}`,'POST',d);emailAvailable=result.emailAvailable;$(id).reset();if(next){location.assign('/checkout.html');return;}message(path==='register'?(result.verificationSent?'帳號已建立，驗證信已寄出。請查看收件匣與垃圾郵件。':'帳號已建立，歡迎加入 WUGONG。'):'登入成功');await showAccount(result.member);});
+for(const [id,path]of [['loginForm','login'],['registerForm','register']])submit($(id),async d=>{if(path==='register'){confirmPassword(d);d.newsletterConsent=d.newsletterConsent==='on';}const result=await api(`/api/member/${path}`,'POST',d);emailAvailable=result.emailAvailable;$(id).reset();if(next){location.assign('/checkout.html');return;}message(path==='register'?(result.verificationSent?'帳號已建立，驗證信已寄出。請查看收件匣與垃圾郵件。':'帳號已建立，歡迎加入 WUGONG。'):'登入成功');await showAccount(result.member);});
 $('forgotPassword').addEventListener('click',()=>{tab(false);$('loginForm').hidden=true;$('forgotPasswordForm').hidden=false;$('sendReset').disabled=!emailAvailable;$('mailSetupNotice').hidden=emailAvailable;});
 $('backToLogin').addEventListener('click',()=>tab(false));
 submit($('forgotPasswordForm'),async d=>{const result=await api('/api/member/forgot-password','POST',d);message(result.message);});
@@ -64,3 +64,14 @@ $('moreOrders').addEventListener('click',()=>loadOrders());$('refreshOrders').ad
 async function initialize(){try{const result=await api('/api/member');emailAvailable=result.emailAvailable;message('');if(emailAction){$('auth').hidden=true;$('account').hidden=true;$('emailAction').hidden=false;$('verifyEmailForm').hidden=emailAction!=='verify';$('resetPasswordForm').hidden=emailAction!=='reset';return;}if(result.member)await showAccount(result.member);else showAuth();}catch(e){message('無法載入會員資料，請重新整理後再試。',true);}}
 window.addEventListener('pageshow',e=>{if(e.persisted)initialize();});
 initialize();
+
+async function loadNewsletter(){
+ $('saveNewsletter').disabled=true;
+ try{const d=await api('/api/member/newsletter');$('newsletterEnabled').checked=d.enabled;$('newsletterStatus').textContent=d.enabled?'已選擇訂閱 / Subscribed':'尚未訂閱 / Not subscribed';$('saveNewsletter').disabled=false;}
+ catch(e){$('newsletterStatus').textContent='無法載入訂閱設定，請重新整理。 / Unable to load preferences. Please refresh.';}
+}
+$('newsletterForm').addEventListener('submit',async e=>{
+ e.preventDefault();$('saveNewsletter').disabled=true;
+ try{const d=await api('/api/member/newsletter','POST',{enabled:$('newsletterEnabled').checked});$('newsletterStatus').textContent=d.enabled?'已儲存訂閱設定 / Subscription saved':'已取消活動電子報 / Unsubscribed from news and events';}
+ catch(e){$('newsletterStatus').textContent=e.message;}finally{$('saveNewsletter').disabled=false;}
+});

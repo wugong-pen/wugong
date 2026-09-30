@@ -34,6 +34,7 @@
         <label>姓名<input name="name" autocomplete="name" required maxlength="100"></label>
         <div class="two"><label>生日<input name="birthday" type="date" autocomplete="bday" min="1900-01-01" required></label><label>國家／地區<select name="country" autocomplete="country" required></select></label></div>
         <p class="hint">姓名、生日與國家儲存於會員資料；生日不公開，也不作為密碼找回的驗證方式。可於會員中心修改。</p>
+        <label class="newsletter-choice" translate="no"><input name="newsletterConsent" type="checkbox">我願意接收新品與活動電子報（選填，可隨時退訂）。<br>I'd like to receive product news and event emails (optional; unsubscribe anytime).</label>
         <button class="primary" type="submit">註冊並登入</button>
       </form>
     </div>
@@ -47,11 +48,19 @@
   <div class="account-layout">
     <section class="panel"><h2>個人資料</h2>
       <form id="profileForm">
+        <label translate="no">會員 Email / Account email<input id="profileEmail" type="email" readonly autocomplete="email"></label>
+        <p class="hint" translate="no">此為註冊與接收通知的信箱。如需更正，請聯絡 wugong.pen@gmail.com。<br>This is your login and notification email. Contact us if it needs correction.</p>
         <label>姓名<input name="name" autocomplete="name" required maxlength="100"></label>
         <div class="two"><label>生日<input name="birthday" type="date" autocomplete="bday" min="1900-01-01" required></label><label>國家／地區<select name="country" autocomplete="country" required></select></label></div>
         <label>聯絡電話（選填）<input name="phone" type="tel" autocomplete="tel" maxlength="40"></label>
         <label>常用收件地址（選填）<textarea name="address" autocomplete="street-address" maxlength="500" rows="3"></textarea></label>
         <button class="primary" type="submit">儲存資料</button>
+      </form>
+      <form id="newsletterForm" class="password-section" translate="no">
+        <h3>活動電子報 / News &amp; events</h3>
+        <label class="newsletter-choice"><input id="newsletterEnabled" type="checkbox">接收新品與活動電子報 / Receive product news and event emails</label>
+        <p class="hint">選填，可隨時取消。不影響訂單、出貨及必要售後通知。訂閱後，信箱驗證完成且有出貨或完成訂單才會收到買家電子報。<br>Optional; unsubscribe anytime. Essential notices are unaffected. Buyer newsletters are sent after email verification and a shipped or completed order.</p>
+        <p id="newsletterStatus" role="status"></p><button id="saveNewsletter" type="submit">儲存訂閱設定 / Save email preferences</button>
       </form>
       <details class="password-section"><summary>變更密碼</summary><form id="passwordForm"><label>目前密碼<input name="currentPassword" type="password" autocomplete="current-password" required maxlength="128"></label><label>新密碼<input name="password" type="password" autocomplete="new-password" required minlength="15" maxlength="128"></label><label>再次輸入新密碼<input name="confirmPassword" type="password" autocomplete="new-password" required minlength="15" maxlength="128"></label><p class="hint">變更後所有裝置會登出，請使用新密碼重新登入。</p><button type="submit">更新密碼</button></form></details>
     </section>

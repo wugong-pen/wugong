@@ -1,5 +1,6 @@
 import {showMember,newMember} from './admin-member-detail.js';
 export async function init({api,node,message}){
+ if(await (await import('./admin-newsletter.js')).init({api,node,message}))return;
  if(await (await import('./admin-nib-guide.js')).init({api,node,message}))return;
  if(await (await import('./admin-shipping.js')).init({api,node,message}))return;
  if(await (await import('./admin-content.js')).init({api,node,message}))return;

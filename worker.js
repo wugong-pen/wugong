@@ -1,3 +1,4 @@
+import {newsletterSchema,newsletterPreferenceStatement,memberNewsletter,manageNewsletters,prepareNewsletterDeliveries,newsletterUnsubscribe} from './newsletter-store.js';
 import {listGuides,manageGuides} from './nib-guide-store.js';
 import {annualUnsubscribe,queueNewYearGreetings,queueNewYearPreview,memberEmailPayload,queueBuyerEmailPreviews,factoryDateForOrder,buyerNotificationStatement,shipmentNotification,notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
 import {readInvoice,manageInvoice} from './manual-invoice.js';
@@ -58,10 +59,11 @@ async function verifyPassword(value,stored) {
 }
 async function body(request) {
   if(!(request.headers.get('Content-Type')||'').toLowerCase().startsWith('application/json')) fail(415,'請使用 JSON 格式');
-  if(Number(request.headers.get('Content-Length'))>32768) fail(413,'資料過長');
+  const bodyLimit=new URL(request.url).pathname==='/api/admin/newsletters'?65536:32768;
+  if(Number(request.headers.get('Content-Length'))>bodyLimit) fail(413,'資料過長');
   const reader=request.body?.getReader(); if(!reader) fail(400,'缺少資料');
   const chunks=[];let size=0;
-  for(;;){const {value,done}=await reader.read();if(done)break;size+=value.byteLength;if(size>32768){await reader.cancel();fail(413,'資料過長');}chunks.push(value);}
+  for(;;){const {value,done}=await reader.read();if(done)break;size+=value.byteLength;if(size>bodyLimit){await reader.cancel();fail(413,'資料過長');}chunks.push(value);}
   const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
   try{const data=JSON.parse(new TextDecoder().decode(bytes));if(!data||typeof data!=='object'||Array.isArray(data))throw new Error();return data;}catch{fail(400,'資料格式不正確');}
 }
@@ -109,6 +111,7 @@ async function adminApi(request,env,url,ctx) {
     return json({success:true},200,{'Set-Cookie':adminCookie('',0)});
   }
   const m=await adminSession(request,env);
+  if(path==='/api/admin/newsletters'){if(method!=='GET')await rate(env,`admin-newsletter:${m.id}`,30);const result=await manageNewsletters(request,env,url,m,body);if(result.queued){const delivery=prepareNewsletterDeliveries(env).then(()=>drainNotifications(env)).catch(()=>console.error('Newsletter delivery deferred'));if(ctx?.waitUntil)ctx.waitUntil(delivery);else await delivery;}return json({success:true,...result});}
   if(path==='/api/admin/nib-guides'){if(method!=='GET')await rate(env,`admin-guide:${m.id}`,120);return json({success:true,...await manageGuides(request,env,url,m,body)});}
   if(['/api/admin/content','/api/admin/content-entry'].includes(path)){if(method!=='GET')await rate(env,`admin-content:${m.id}`,120);return json({success:true,...await manageContent(request,env,url,m,body)});}
   if(path==='/api/admin/homepage'){if(method!=='GET')await rate(env,`admin-homepage:${m.id}`,60);return json({success:true,...await manageHomepage(request,env,m,body)});}
@@ -226,6 +229,7 @@ async function api(request,env,url,ctx) {
   if(!['GET','HEAD'].includes(method)&&(request.headers.get('Origin')!==url.origin||request.headers.get('Sec-Fetch-Site')==='cross-site')) fail(403,'請從本站頁面操作');
   if(path.startsWith('/api/admin/')||path==='/api/orders'||path==='/api/order/status')return adminApi(request,env,url,ctx);
   if(path==='/api/member'&&method==='GET') {const m=await session(request,env,false);return json({success:true,member:m?publicMember(m):null,emailAvailable:mailAvailable(env,url)});}
+  if(path==='/api/member/newsletter'){const m=await session(request,env);return json({success:true,...await memberNewsletter(request,env,m,method==='POST'?await body(request):null)});}
   if(path==='/api/member/verify-email'&&method==='POST')return consumeEmailToken(request,env,'verify');
   if(path==='/api/member/reset-password'&&method==='POST')return consumeEmailToken(request,env,'reset');
   if(path==='/api/member/resend-verification'&&method==='POST') {
@@ -243,9 +247,11 @@ async function api(request,env,url,ctx) {
   if(path==='/api/member/register'&&method==='POST') {
     await rate(env,`register:${request.headers.get('CF-Connecting-IP')||'local'}`,8);
     const data=await body(request),p=profile(data),address=email(data.email),secret=password(data.password),stamp=new Date().toISOString();
+    if(data.newsletterConsent!==undefined&&typeof data.newsletterConsent!=='boolean')fail(400,'請確認電子報訂閱選項');
     const m={id:crypto.randomUUID(),email:address,...p,created_at:stamp};
     m.password_hash=await hashPassword(secret);
-    const result=await env.DB.prepare('INSERT OR IGNORE INTO members(id,email,password_hash,name,birthday,country,phone,address,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(m.id,address,m.password_hash,p.name,p.birthday,p.country,p.phone,p.address,stamp,stamp).run();
+    const registration=env.DB.prepare('INSERT OR IGNORE INTO members(id,email,password_hash,name,birthday,country,phone,address,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(m.id,address,m.password_hash,p.name,p.birthday,p.country,p.phone,p.address,stamp,stamp);
+    let result;if(data.newsletterConsent){await newsletterSchema(env);[result]=await env.DB.batch([registration,newsletterPreferenceStatement(env,m,true)]);}else result=await registration.run();
     if(!result.meta.changes) fail(409,'無法使用這個電子郵件註冊；若已有帳號，請登入');
     let verificationSent=false;
     if(mailAvailable(env,url)){try{await sendMemberEmail(env,m,'verify',url);verificationSent=true;}catch{console.error('Registration verification email delivery failed');}}
@@ -342,12 +348,13 @@ async function api(request,env,url,ctx) {
   fail(404,'找不到此功能');
 }
 export default {
-  async scheduled(event,env){await queueNewYearGreetings(env);await drainNotifications(env);if(env.APP_ENV==='staging'){await expireReservations(env);await reconcilePayments(env);}},
+  async scheduled(event,env){await queueNewYearGreetings(env);await prepareNewsletterDeliveries(env);await drainNotifications(env);if(env.APP_ENV==='staging'){await expireReservations(env);await reconcilePayments(env);}},
   async fetch(request,env,ctx) {
     const url=new URL(request.url);
     try{
       let response;
-      if(url.pathname==='/annual-greetings/unsubscribe')response=await annualUnsubscribe(request,env);
+      if(url.pathname==='/newsletter/unsubscribe')response=await newsletterUnsubscribe(request,env);
+      else if(url.pathname==='/annual-greetings/unsubscribe')response=await annualUnsubscribe(request,env);
       else if(url.pathname==='/'&&url.searchParams.get('homepage-preview')==='1'&&!await adminSession(request,env,false))response=new Response(null,{status:303,headers:{Location:'/admin-login.html','Cache-Control':'no-store'}});
       else if(url.pathname.startsWith('/media/'))response=await publicCommerce(request,env,url)||new Response(null,{status:404});
       else if(url.pathname.startsWith('/api/'))response=await api(request,env,url,ctx);
