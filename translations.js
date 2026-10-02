@@ -198,7 +198,7 @@ export const translations = {
   "查看我的購買紀錄 →": "View my order history →",
   "確認訂單": "Confirm order",
   "請僅使用測試帳號及測試卡，銀行匯款請勿匯款。": "Use test accounts and cards only. Do not transfer real money.",
-  "運費依收件地區另計。目前不會出貨；正式收款尚未開放。": "Shipping is charged separately by destination. No orders will be dispatched during testing. Live payments are not yet available.",
+  "運費依收件地區計算，請於送出訂單前確認總金額。": "Shipping is calculated by destination. Please review the total before placing your order.",
   "付款確認｜WUGONG": "Payment Status | WUGONG",
   "測試付款": "Test Payment",
   "測試訂單不會出貨。銀行匯款請勿匯入真實款項。": "Test orders will not be dispatched. Do not transfer real money to the bank account.",
