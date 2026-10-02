@@ -1,4 +1,4 @@
-# Default deployment is always the isolated test site.
+# Existing connected website. Live collection authorized by owner on 2026-10-01.
 name = "wugong-test"
 main = "worker.js"
 compatibility_date = "2026-09-07"
@@ -14,7 +14,9 @@ run_worker_first = true
 
 [vars]
 APP_ENV = "staging"
-BANK_TEST_CONFIG = '{"bank":"測試銀行（請勿匯款）","code":"TEST","branch":"測試分行","holder":"測試戶名","account":"TEST-NOT-A-REAL-ACCOUNT","days":3}'
+PAYMENTS_LIVE = "true"
+ECPAY_MERCHANT_ID = "3442057"
+ECPAY_TWQR_ENABLED = "false"
 PAYMENT_ORIGIN = "https://wugong-test.wugong-pen.workers.dev"
 MAIL_FROM = "WUGONG <noreply@mail.wugong-pen.com>"
 MAIL_ORIGIN = "https://wugong-test.wugong-pen.workers.dev"

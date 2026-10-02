@@ -1,5 +1,17 @@
 // Reviewed storefront copy. Exact matches only; never modify submitted values.
 export const translations = {
+  "海外訂單採人工確認：下單時留下會員 Email 及完整收件資料，我們確認商品與運費後，另行寄送 PayPal 帳單。收到帳單不代表已付款；確認收款後才安排出貨。付款期限以帳單為準。": "Overseas orders are reviewed manually. We confirm your items and shipping, then email a separate PayPal invoice. We arrange dispatch after payment is confirmed. The payment deadline is stated on the invoice.",
+  "自行匯款（3 天內）": "Bank transfer (within 3 days)",
+  "綠界信用卡": "Credit card via ECPay",
+  "歐付寶 TWQR": "O'Pay TWQR",
+  "海外訂單・確認後另寄 PayPal 帳單": "Overseas orders · PayPal invoice emailed after review",
+  "付款成功並確認備貨後安排寄送，出貨時另寄 Email 通知。": "We arrange shipping after payment and stock confirmation, and email you when your order ships.",
+  "付款確認": "Payment status",
+  "請核對訂單付款狀態；已付款時請勿重複支付。": "Check your payment status. Please do not pay again if you have already paid.",
+  "回報已匯款": "Report bank transfer",
+  "繼續付款": "Continue payment",
+  "查看付款狀態／繼續付款": "View payment status / Continue payment",
+
   "選單": "Menu",
   "首頁": "Home",
   "作品系列": "Collections",

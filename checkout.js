@@ -38,10 +38,10 @@ window.addEventListener('pageshow',event=>{if(event.persisted)initialize();});in
 
 async function updateMethods(){
  $('submitOrder').disabled=true;
- const country=$('country').value,seq=quoteSequence;const r=await fetch('/api/payments/methods?country='+encodeURIComponent(country));const data=await r.json();if(seq!==quoteSequence||country!==$('country').value)return;
+ const country=$('country').value,seq=quoteSequence;$('shipping').options[0].textContent=country==='TW'?'宅配':'海外郵寄／快遞';const r=await fetch('/api/payments/methods?country='+encodeURIComponent(country));const data=await r.json();if(seq!==quoteSequence||country!==$('country').value)return;
  if(!r.ok||!data.success)throw new Error(data.error||'無法載入付款方式');
  const inputs=[...document.querySelectorAll('input[name=payment]')];
- for(const input of inputs){input.disabled=!data.methods[input.value];if(input.disabled)input.checked=false;}
+ for(const input of inputs){input.disabled=!data.methods[input.value]||(input.value==='ecpay_twqr'&&(expectedTotal<6||expectedTotal>49999));input.closest('label').hidden=input.disabled;if(input.disabled)input.checked=false;}
  if(!inputs.some(i=>i.checked)) {const first=inputs.find(i=>!i.disabled);if(first)first.checked=true;}
  $('submitOrder').textContent=country!=='TW'?'送出訂單，等待帳單確認':'送出訂單';
  $('submitOrder').disabled=busy||!shippingReady||!inputs.some(i=>i.checked);
@@ -53,7 +53,7 @@ $('country').addEventListener('change',refreshFirstGift);
 $('phone').addEventListener('change',refreshFirstGift);
 async function startPayment(orderNumber){
  if(pendingPayment==='paypal_invoice'){localStorage.removeItem('wugongCart');location.assign('/member.html');return;}
- if(pendingPayment!=='ecpay'){
+ if(!['ecpay','ecpay_twqr'].includes(pendingPayment)){
   const r=await fetch('/api/payments/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({orderNumber})});const data=await r.json();
   if(!r.ok||!data.success)throw new Error(data.error||'無法開始付款');
   if(data.bank){localStorage.removeItem('wugongCart');location.assign('/payment-return.html?'+new URLSearchParams({order:orderNumber,provider:'bank'}));return;}
@@ -63,7 +63,7 @@ async function startPayment(orderNumber){
 
  const response=await fetch('/api/payments/ecpay/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({orderNumber})});const result=await response.json();
  if(!response.ok||!result.success)throw new Error(result.error||'無法開啟付款頁，請到購買紀錄查看訂單');
- if(result.action!=='https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5')throw new Error('付款網址不符');
+ if(result.action!=='https://payment.ecpay.com.tw/Cashier/AioCheckOut/V5')throw new Error('付款網址不符');
  const form=document.createElement('form');form.method='POST';form.action=result.action;
  for(const [name,value]of Object.entries(result.fields)){const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.append(input);}
  document.body.append(form);localStorage.removeItem('wugongCart');form.submit();

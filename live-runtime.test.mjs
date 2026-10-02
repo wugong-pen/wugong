@@ -1,0 +1,56 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+import {readFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {checkMac} from './ecpay.js';
+import {shippingQuote,shippingStatements,shippingSchema} from './shipping.js';
+import {firstGiftQuote,firstGiftStatements,firstGiftForOrder} from './first-purchase.js';
+const require=createRequire(import.meta.url);
+const {Miniflare,convertV4MiniflareOptions}=require(require.resolve('miniflare',{paths:[require.resolve('wrangler')]}));
+test('live bank checkout, buyer report, administrator settlement and shipment notifications',async()=>{
+ const mf=new Miniflare(convertV4MiniflareOptions({modules:[{type:'ESModule',path:fileURLToPath(new URL('./worker.js',import.meta.url)),contents:readFileSync(new URL('./worker.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./first-purchase.js',import.meta.url)),contents:readFileSync(new URL('./first-purchase.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./countries.js',import.meta.url)),contents:readFileSync(new URL('./countries.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./ecpay.js',import.meta.url)),contents:readFileSync(new URL('./ecpay.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./payments.js',import.meta.url)),contents:readFileSync(new URL('./payments.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./inventory.js',import.meta.url)),contents:readFileSync(new URL('./inventory.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./commerce.js',import.meta.url)),contents:readFileSync(new URL('./commerce.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./modules.js',import.meta.url)),contents:readFileSync(new URL('./modules.js',import.meta.url),'utf8')},...['live-payments.js','newsletter-store.js','newsletter-model.js','nib-guide-store.js','nib-guide-model.js','product-translations.js','order-notifications.js','manual-invoice.js','shipping.js','homepage-store.js','homepage-config.js','content-store.js','content-model.js'].map(f=>({type:'ESModule',path:fileURLToPath(new URL(f,import.meta.url)),contents:readFileSync(new URL(f,import.meta.url),'utf8')}))],compatibilityDate:'2026-09-07',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],bindings:{APP_ENV:'staging',PAYMENTS_LIVE:'true',MAIL_FROM:'shop@example.test',MAIL_ORIGIN:'https://shop.test',PAYMENT_ORIGIN:'https://wugong-test.wugong-pen.workers.dev',BANK_CONFIG:JSON.stringify({bank:'Bank',code:'009',branch:'Branch',holder:'Holder',account:'123456789',days:3})}}));
+ try{
+  const db=await mf.getD1Database('DB');
+  const schema=readFileSync(new URL('./schema-members.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'');
+  for(const statement of schema.split(';').filter(s=>s.trim()))await db.prepare(statement).run();
+  for(const statement of readFileSync(new URL('./schema-admin.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'').split(';').filter(s=>s.trim()))await db.prepare(statement).run();
+  const response=await mf.dispatchFetch('https://shop.test/api/member/register',{method:'POST',headers:{Origin:'https://shop.test','Content-Type':'application/json'},body:JSON.stringify({email:'runtime@example.test',password:'runtime test password is long',name:'測試會員',birthday:'1990-01-01',country:'TW'})});
+  assert.equal(response.status,200,await response.clone().text());const result=await response.json();assert.equal(response.status,200,JSON.stringify(result));assert.equal(result.member.name,'測試會員');
+  const cookie=response.headers.get('set-cookie').split(';')[0];
+  const me=await mf.dispatchFetch('https://shop.test/api/member',{headers:{Cookie:cookie}});assert.equal((await me.json()).member.email,'runtime@example.test');
+  assert.equal((await mf.dispatchFetch('https://shop.test/api/admin/session',{headers:{Cookie:cookie}})).status,403);
+  await db.prepare('INSERT INTO admin_members VALUES (?,1,?)').bind(result.member.id,new Date().toISOString()).run();
+  const adminLogin=await mf.dispatchFetch('https://shop.test/api/admin/login',{method:'POST',headers:{Origin:'https://shop.test','Content-Type':'application/json'},body:JSON.stringify({email:'runtime@example.test',password:'runtime test password is long'})});
+  assert.equal(adminLogin.status,200);const adminCookie=adminLogin.headers.get('set-cookie').split(';')[0];
+  assert.equal((await mf.dispatchFetch('https://shop.test/api/admin/session',{headers:{Cookie:adminCookie}})).status,200);
+  await db.prepare('CREATE TABLE orders(order_number TEXT PRIMARY KEY,customer_name TEXT,phone TEXT,email TEXT,address TEXT,shipping TEXT,payment TEXT,note TEXT,items TEXT,total INTEGER,status TEXT,created_at TEXT)').run();
+  for(const statement of readFileSync(new URL('./schema-payments.sql',import.meta.url),'utf8').split(';').filter(s=>s.trim()))await db.prepare(statement).run();
+  for(const statement of readFileSync(new URL('./schema-checkout.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'').match(/CREATE TRIGGER[\s\S]*?\nEND;|CREATE (?:TABLE|INDEX)[\s\S]*?;/g))await db.prepare(statement).run();
+  for(const statement of readFileSync(new URL('./seed-inventory-staging.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'').split(';').filter(s=>s.trim()))await db.prepare(statement).run();
+  for(const statement of readFileSync(new URL('./schema-commerce.sql',import.meta.url),'utf8').match(/CREATE TRIGGER[\s\S]*?END;|CREATE (?:TABLE|INDEX)[\s\S]*?;/g))await db.prepare(statement).run();
+  for(const statement of readFileSync(new URL('./seed-products.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'').split(';').filter(s=>s.trim()))await db.prepare(statement).run();
+  for(const statement of readFileSync(new URL('./schema-modules.sql',import.meta.url),'utf8').split(';').filter(s=>s.trim()))await db.prepare(statement).run();for(const statement of readFileSync(new URL('./schema-categories-gifts.sql',import.meta.url),'utf8').split(';').filter(s=>s.trim()))await db.prepare(statement).run();await db.prepare('UPDATE product_families SET confirmed=1').run();await db.prepare("UPDATE inventory SET available=5 WHERE sku LIKE 'body-%'").run();
+
+ const headers={Origin:'https://shop.test','Content-Type':'application/json',Cookie:cookie},adminHeaders={...headers,Cookie:adminCookie};
+ const post=(path,data,h=headers)=>mf.dispatchFetch('https://shop.test'+path,{method:'POST',headers:h,body:JSON.stringify(data)});
+ const checkout={customer:{name:'Buyer',phone:'0900000000',address:'Address',country:'TW'},items:[{id:'pojun-單尖',nib:'單尖',quantity:1}],expectedTotal:25000,payment:'bank',shipping:'宅配'};
+ const placed=await post('/api/order',checkout,{...headers,'Idempotency-Key':'live-order-fixture-0001'});assert.equal(placed.status,200,await placed.clone().text());const {orderNumber}=await placed.json();
+ const attempt=await db.prepare('SELECT * FROM payment_attempts WHERE order_number=?').bind(orderNumber).first();assert.equal(JSON.parse(attempt.bank_details).account,'123456789');
+ let notices=(await db.prepare('SELECT payload FROM order_notifications').all()).results;assert.equal(notices.length,2);assert.ok(notices.some(n=>JSON.parse(n.payload).text.includes('123456789')));
+ const report={orderNumber,last5:'54321',date:new Date(Date.now()+8*3600000).toISOString().slice(0,10)};
+ const reported=await post('/api/payments/bank/report',report);assert.equal(reported.status,200,await reported.clone().text());
+ const again=await post('/api/payments/bank/report',report);assert.equal(again.status,200);
+ assert.equal((await db.prepare('SELECT status FROM orders WHERE order_number=?').bind(orderNumber).first()).status,'pending');
+ const proof={orderNumber,reference:'BANK-REF-001',amount:25000,confirmed:true};
+ assert.equal((await post('/api/admin/bank/confirm',proof)).status,403);
+ const badOrigin=await post('/api/admin/bank/confirm',proof,{...adminHeaders,Origin:'https://evil.test'});assert.equal(badOrigin.status,403);
+ const paid=await post('/api/admin/bank/confirm',proof,adminHeaders);assert.equal(paid.status,200,await paid.clone().text());
+ assert.equal((await post('/api/admin/bank/confirm',proof,adminHeaders)).status,409);
+ const ship=await post('/api/admin/order/status',{orderNumber,expectedStatus:'paid',status:'shipped',factoryDate:new Date(Date.now()+8*3600000).toISOString().slice(0,10)},adminHeaders);assert.equal(ship.status,200,await ship.clone().text());
+ const rows=(await db.prepare('SELECT id,payload FROM order_notifications').all()).results;
+ for(const prefix of ['new-order/','buyer-confirmed/','bank-report/','buyer-paid/','buyer-shipped/','buyer-care/'])assert.equal(rows.filter(n=>n.id.startsWith(prefix)).length,1,prefix);
+ assert.match(JSON.parse(rows.find(n=>n.id.startsWith('buyer-shipped/')).payload).text,/Factory date/);
+ assert.equal((await db.prepare('SELECT status FROM orders WHERE order_number=?').bind(orderNumber).first()).status,'shipped');
+ }finally{await mf.dispose();}
+});

@@ -5,7 +5,7 @@ if(document.body.dataset.page!=='login'){
  for(const [label,url] of [['首頁編輯','/admin-manage.html?section=homepage'],['網誌圖文','/admin-manage.html?section=blog'],['獲獎紀錄','/admin-manage.html?section=awards'],['活動花絮','/admin-manage.html?section=events'],['媒體採訪','/admin-manage.html?section=media'],['訂單管理','/admin-orders.html'],['商品管理','/admin-manage.html?section=products'],['筆款庫存／影片','/admin-manage.html?section=stock'],['尖型管理','/admin-manage.html?section=nibs'],['筆尖與規格指南','/admin-manage.html?section=nib-guide'],['品牌／商品分類','/admin-manage.html?section=categories'],['配送國家／運費','/admin-manage.html?section=shipping'],['優惠券','/admin-manage.html?section=coupons'],['會員管理','/admin-manage.html?section=members'],['買家電子報','/admin-manage.html?section=newsletter'],['操作紀錄','/admin-manage.html?section=audit'],['查看商店','/shop.html']]){const a=document.createElement('a');a.textContent=label;a.href=url;if((url.includes(location.search)&&url.includes('admin-manage')&&location.pathname.includes('admin-manage'))||(!location.search&&url.includes('admin-orders')&&location.pathname.includes('admin-orders')))a.setAttribute('aria-current','page');nav.append(a);}document.querySelector('header').after(nav);
 }
 const labels={pending:'待付款',confirmed:'已確認',paid:'已付款',test_paid:'模擬付款紀錄',shipped:'已出貨',completed:'已完成',cancelled:'已取消',expired:'已逾期'};
-const payments={paypal_invoice:'海外 PayPal 人工帳單',bank:'銀行匯款',paypal:'PayPal',linepay:'LINE Pay'};
+const payments={ecpay:'綠界信用卡',ecpay_twqr:'歐付寶 TWQR',paypal_invoice:'海外 PayPal 人工帳單',bank:'銀行匯款',paypal:'PayPal',linepay:'LINE Pay'};
 const money=n=>'NT$ '+Number(n).toLocaleString('zh-TW');
 let page=1,currentOrder;
 const message=s=>{$('message').textContent=s;};
@@ -34,12 +34,14 @@ async function loadDetail(){
  try{const number=new URLSearchParams(location.search).get('order');if(!number)throw new Error('缺少訂單編號');
   const {order:o}=await api('/api/admin/orders/'+encodeURIComponent(number));currentOrder=o;
   const dl=node('dl');for(const [label,value] of [['訂單編號',o.order_number],['姓名',o.customer_name],['電話',o.phone],['電子郵件',o.email],['收件國家',o.shipping_country||'未記錄'],['收件地址',o.address],['商品',items(o.items)],['金額',money(o.total)],['付款方式',payments[o.payment]||o.payment],['配送方式',o.shipping],['狀態',labels[o.status]||o.status],['備註',o.note||'無'],['下單時間',date(o.created_at)]])dl.append(node('dt',label),node('dd',value));$('content').append(dl);
-  if(['paid','test_paid','shipped'].includes(o.status)){$('advance').textContent=o.status!=='shipped'?'標記為已出貨':'標記為已完成';$('advance').hidden=false;}
-  const factoryPanel=node('section');factoryPanel.id='factory-date-panel';factoryPanel.className='card';const factoryLabel=node('label','出廠日期（請與隨貨保固卡一致）'),factoryInput=node('input');factoryInput.type='date';factoryInput.id='factory-date';factoryInput.value=o.factory_date||'';factoryInput.max=new Date(Date.now()+8*3600000).toISOString().slice(0,10);factoryInput.required=true;factoryInput.disabled=!['paid','test_paid'].includes(o.status);factoryLabel.append(factoryInput);factoryPanel.append(factoryLabel,node('p','保固期間：自出廠日期起一年。標記出貨時儲存，並寫入買家出貨通知信。'));$('advance').before(factoryPanel);
+  if(['paid','shipped'].includes(o.status)||(o.status==='test_paid'&&!o.live_mode)){$('advance').textContent=o.status!=='shipped'?'標記為已出貨':'標記為已完成';$('advance').hidden=false;}
+  const factoryPanel=node('section');factoryPanel.id='factory-date-panel';factoryPanel.className='card';const factoryLabel=node('label','出廠日期（請與隨貨保固卡一致）'),factoryInput=node('input');factoryInput.type='date';factoryInput.id='factory-date';factoryInput.value=o.factory_date||'';factoryInput.max=new Date(Date.now()+8*3600000).toISOString().slice(0,10);factoryInput.required=true;factoryInput.disabled=!(o.status==='paid'||o.status==='test_paid'&&!o.live_mode);factoryLabel.append(factoryInput);factoryPanel.append(factoryLabel,node('p','保固期間：自出廠日期起一年。標記出貨時儲存，並寫入買家出貨通知信。'));$('advance').before(factoryPanel);
   message('');
   await orderManagement(o.order_number);
   await (await import('./admin-notifications.js')).renderNotifications({api,node,order:o.order_number});
   document.getElementById('manual-invoice')?.remove();
+  document.getElementById('bank-confirm')?.remove();
+  if(o.payment==='bank')await (await import('./admin-bank.js')).renderBank({o,api,node,reload:loadDetail,message});
   if(o.payment==='paypal_invoice')await (await import('./admin-invoice.js')).renderInvoice({o,api,node,reload:loadDetail,message});
   if(o.status==='pending'){
    const cancel=node('button','取消未付款訂單');cancel.id='cancel-order';cancel.type='button';$('advance').after(cancel);

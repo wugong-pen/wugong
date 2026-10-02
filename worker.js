@@ -1,3 +1,4 @@
+import {liveEnabled,liveSchema,reportBank,confirmBank} from './live-payments.js';
 import {newsletterSchema,newsletterPreferenceStatement,memberNewsletter,manageNewsletters,prepareNewsletterDeliveries,newsletterUnsubscribe} from './newsletter-store.js';
 import {listGuides,manageGuides} from './nib-guide-store.js';
 import {annualUnsubscribe,queueNewYearGreetings,queueNewYearPreview,memberEmailPayload,queueBuyerEmailPreviews,factoryDateForOrder,buyerNotificationStatement,shipmentNotification,notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
@@ -8,8 +9,8 @@ import {readHomepage,manageHomepage} from './homepage-store.js';
 import {publicContent,manageContent} from './content-store.js';
 import {discountQuote,couponStatements} from './modules.js';
 import {expireReservations,checkStock,reserveStatements} from './inventory.js';
-import {methods,start,confirm,reconcilePayments} from './payments.js';
-import {quote,paymentForm,notify,sandbox} from './ecpay.js';
+import {bankConfig,methods,start,confirm,reconcilePayments} from './payments.js';
+import {quote,paymentForm,notify,sandbox,reconcileEcpay} from './ecpay.js';
 import { scrypt, timingSafeEqual } from 'node:crypto';
 import { COUNTRY_CODES } from './countries.js';
 import {catalogQuote,catalogGuards,publicCommerce,manageCommerce} from './commerce.js';
@@ -123,9 +124,10 @@ async function adminApi(request,env,url,ctx) {
     if(method==='GET')return json({success:true,...await notificationStatus(env,url.searchParams.get('order'))});
     if(method==='POST'){const d=await body(request);if(d.kind==='newyear-preview'){await rate(env,`newyear-preview:${m.id}`,3);await queueNewYearPreview(env,d.email,d.key,m.id);await drainNotifications(env);return json({success:true,...await notificationStatus(env)});}if(d.kind==='buyer-preview'){await rate(env,`buyer-preview:${m.id}`,3);await queueBuyerEmailPreviews(env,d.email,d.key,m.id);await drainNotifications(env);return json({success:true,...await notificationStatus(env)});}await rate(env,`notification-test:${m.id}`,3);await queueTestNotification(env);await drainNotifications(env);return json({success:true,...await notificationStatus(env)});}
   }
+  if(path==='/api/admin/bank/confirm'&&method==='POST'){await rate(env,`bank-confirm:${m.id}`,60);await confirmBank(env,m,await body(request));await drainNotifications(env);return json({success:true});}
   if(path==='/api/admin/manual-invoice'){
     if(method==='GET')return json({success:true,invoice:await readInvoice(env,text(url.searchParams.get('order'),60,'訂單編號'))});
-    if(method==='POST'){await rate(env,`invoice:${m.id}`,60);await manageInvoice(env,m,await body(request));return json({success:true});}
+    if(method==='POST'){await rate(env,`invoice:${m.id}`,60);await manageInvoice(env,m,await body(request));await drainNotifications(env);return json({success:true});}
   }
   if(path==='/api/admin/session'&&method==='GET')return json({success:true,admin:{name:m.name,email:m.email}});
   const base='SELECT o.order_number,o.customer_name,o.phone,o.email,o.address,o.shipping,o.payment,o.note,o.items,o.total,o.status,o.created_at,mo.shipping_country FROM orders o LEFT JOIN member_orders mo ON mo.order_number=o.order_number';
@@ -139,14 +141,14 @@ async function adminApi(request,env,url,ctx) {
   if(path.startsWith('/api/admin/orders/')&&method==='GET') {
     let number;try{number=decodeURIComponent(path.slice('/api/admin/orders/'.length));}catch{fail(400,'訂單編號不正確');}
     const order=await env.DB.prepare(base+' WHERE o.order_number=?').bind(text(number,60,'訂單編號')).first();
-    if(!order)fail(404,'找不到此訂單');return json({success:true,order:{...order,factory_date:await factoryDateForOrder(env,order.order_number),invoice:order.payment==='paypal_invoice'?await readInvoice(env,order.order_number):null}});
+    if(!order)fail(404,'找不到此訂單');return json({success:true,order:{...order,live_mode:liveEnabled(env),factory_date:await factoryDateForOrder(env,order.order_number),invoice:order.payment==='paypal_invoice'?await readInvoice(env,order.order_number):null}});
   }
   if((path==='/api/admin/order/status'||path==='/api/order/status')&&method==='POST') {
     await rate(env,`admin-update:${m.id}`,100);
     const data=await body(request),number=text(data.orderNumber,60,'訂單編號');
     // Payment/stock transitions belong exclusively to verified payment workflows.
     if(!Object.keys(data).every(k=>['orderNumber','status','expectedStatus','invoiceCancelled','factoryDate'].includes(k)))fail(400,'不支援的訂單欄位');
-    const transitions={paid:'shipped',shipped:'completed',...(env.APP_ENV==='staging'?{test_paid:'shipped'}:{})};
+    const transitions={paid:'shipped',shipped:'completed',...(env.APP_ENV==='staging'&&!liveEnabled(env)?{test_paid:'shipped'}:{})};
     await firstSchema(env);
     if(data.expectedStatus==='pending'&&data.status==='cancelled'){
       const cancelling=await env.DB.prepare('SELECT payment FROM orders WHERE order_number=?').bind(number).first();
@@ -287,7 +289,7 @@ async function api(request,env,url,ctx) {
     const base='SELECT o.order_number,o.customer_name,o.phone,o.email,o.address,o.shipping,o.payment,o.note,o.items,o.total,o.status,o.created_at,mo.shipping_country,(SELECT state FROM checkout_reservations WHERE order_number=o.order_number) AS reservation_state,(SELECT expires_at FROM checkout_reservations WHERE order_number=o.order_number) AS reserved_until FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE mo.member_id=?';
     if(path!=='/api/member/orders') {
       const order=await env.DB.prepare(base+' AND o.order_number=?').bind(m.id,decodeURIComponent(path.slice('/api/member/orders/'.length))).first();
-      if(!order)fail(404,'找不到此訂單');return json({success:true,order:{...order,factory_date:await factoryDateForOrder(env,order.order_number),invoice:order.payment==='paypal_invoice'?await readInvoice(env,order.order_number):null}});
+      if(!order)fail(404,'找不到此訂單');return json({success:true,order:{...order,live_mode:liveEnabled(env),factory_date:await factoryDateForOrder(env,order.order_number),invoice:order.payment==='paypal_invoice'?await readInvoice(env,order.order_number):null}});
     }
     const page=Math.floor(Math.max(1,Math.min(100000,Number(url.searchParams.get('page'))||1)));
     const result=await env.DB.prepare(base+' ORDER BY o.id DESC LIMIT 21 OFFSET ?').bind(m.id,(page-1)*20).all();
@@ -301,6 +303,7 @@ async function api(request,env,url,ctx) {
     if(!order)fail(404,'找不到此訂單');
     if(path==='/api/payments/start')return json({success:true,...await start(order,env)});
     if(path==='/api/payments/confirm'){await confirm(order,env,data);return json({success:true});}
+    if(liveEnabled(env)){await reportBank(env,order,data);await drainNotifications(env);return json({success:true,message:'已收到回報，待人工核對；回報不代表付款完成'});}
     if(order.payment!=='bank'||order.status!=='pending')fail(409,'此訂單無法回報匯款');
     if(!/^\d{5}$/.test(data.last5||'')||!/^\d{4}-\d{2}-\d{2}$/.test(data.date||''))fail(400,'請輸入匯款帳號末五碼與日期');
     const stamp=Date.parse(data.date+'T00:00:00+08:00');
@@ -313,7 +316,7 @@ async function api(request,env,url,ctx) {
   if(path==='/api/payments/ecpay/start'&&method==='POST'){
     const m=await session(request,env);sandbox(env);const data=await body(request);
     const order=await env.DB.prepare('SELECT o.* FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE o.order_number=? AND mo.member_id=?').bind(text(data.orderNumber,60,'訂單編號'),m.id).first();
-    if(!order)fail(404,'找不到此訂單');return json({success:true,...paymentForm(order,env)});
+    if(!order)fail(404,'找不到此訂單');return json({success:true,...await paymentForm(order,env)});
   }
   if(path==='/api/order'&&method==='POST') {
     const m=await session(request,env);await rate(env,`orders:${m.id}`,30);
@@ -328,18 +331,23 @@ async function api(request,env,url,ctx) {
     const q=await shippingQuote(env,await discountQuote(env,await catalogQuote(env,order.items),order.coupon,m.id),c.country,true),{items,total}=q,number='WG'+random().slice(0,18);
     if(c.country!=='TW'&&(items.some(i=>i.category==='ink')||q.coupon?.kind==='gift'&&q.coupon.gift_kind==='ink'))fail(400,'墨水（含贈品）僅寄送台灣，請移除墨水商品或更換優惠券後再結帳');
     const firstGift=await firstGiftQuote(env,items,m.id,c.country,order.firstCoupon,phone);if(firstGift?.kind==='ink'&&c.country!=='TW')fail(400,'墨水贈品僅寄送台灣');
-    const shipping=text(order.shipping??'',40,'配送方式',false),payment=text(order.payment,30,'付款方式'),note=text(order.note??'',1000,'備註',false);
+    const shipping=c.country==='TW'?'宅配':'海外郵寄／快遞',payment=text(order.payment,30,'付款方式'),note=text(order.note??'',1000,'備註',false);
     if(methods(env,c.country)[payment]!==true)fail(400,'此付款方式尚未設定或不適用收件國家');
+    if(payment==='ecpay_twqr'&&(total<6||total>49999))fail(400,'TWQR 單筆限 NT$6～49,999，請改用其他付款方式');
     if(order.expectedTotal!==total)fail(409,'商品金額或運費已更新，請重新整理後確認');
     await notificationSchema(env);
     const createdAt=new Date().toISOString();
+    if(liveEnabled(env))await liveSchema(env);
+    const bank=payment==='bank'?bankConfig(env):null,dueAt=bank?new Date(Date.parse(createdAt)+bank.days*86400000).toISOString():null;
     try{await env.DB.batch([
       ...catalogGuards(env,items),
       env.DB.prepare('INSERT INTO orders(order_number,customer_name,phone,email,address,shipping,payment,note,items,total,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(number,name,phone,m.email,address,shipping,payment,note+'\n配送運費：NT$'+q.shippingFee+(q.gift?'\n優惠券贈品：'+q.gift:'')+(firstGift?'\n首購贈品'+(firstGift.code?'（'+firstGift.code+'）':'')+'：'+firstGift.description+'\n'+giftNotice:''),JSON.stringify(items),total,'pending',createdAt),
       notificationStatement(env,{order_number:number,created_at:createdAt,email:m.email,country:c.country,items,total,payment}),
-      buyerNotificationStatement(env,{order_number:number,created_at:createdAt,email:m.email,items,total,payment},'confirmed'),
+      buyerNotificationStatement(env,{order_number:number,created_at:createdAt,email:m.email,items,total,payment,bank,dueAt},'confirmed'),
       env.DB.prepare('INSERT INTO member_orders(order_number,member_id,shipping_country,request_key) VALUES (?,?,?,?)').bind(number,m.id,c.country,key),
-      ...shippingStatements(env,q,number),...reserveStatements(env,number,items,payment),...couponStatements(env,q,m.id,number),...firstGiftStatements(env,firstGift,m.id,number,giftPhone(phone,c.country))
+      ...shippingStatements(env,q,number),...reserveStatements(env,number,items,payment),
+      ...(liveEnabled(env)?[env.DB.prepare('INSERT INTO live_orders(order_number,created_at) VALUES (?,?)').bind(number,createdAt)]:[]),
+      ...(bank&&liveEnabled(env)?[env.DB.prepare("INSERT INTO payment_attempts(order_number,provider,state,bank_details,due_at) VALUES (?,'bank',?,?,?)").bind(number,crypto.randomUUID(),JSON.stringify(bank),dueAt),env.DB.prepare("UPDATE checkout_reservations SET state='paying',expires_at=? WHERE order_number=?").bind(dueAt,number)]:[]),...couponStatements(env,q,m.id,number),...firstGiftStatements(env,firstGift,m.id,number,giftPhone(phone,c.country))
     ]);}catch(error){const retry=await env.DB.prepare('SELECT order_number FROM member_orders WHERE member_id=? AND request_key=?').bind(m.id,key).first();if(!retry){if(error.message?.includes('CHECK constraint failed: quantity'))fail(409,'商品庫存不足，請調整數量後再試');throw error;}return json({success:true,orderNumber:retry.order_number});}
     const delivery=drainNotifications(env).catch(()=>console.error('Order notification delivery deferred'));
     if(ctx?.waitUntil)ctx.waitUntil(delivery);else await delivery;
@@ -348,7 +356,7 @@ async function api(request,env,url,ctx) {
   fail(404,'找不到此功能');
 }
 export default {
-  async scheduled(event,env){await queueNewYearGreetings(env);await prepareNewsletterDeliveries(env);await drainNotifications(env);if(env.APP_ENV==='staging'){await expireReservations(env);await reconcilePayments(env);}},
+  async scheduled(event,env){await queueNewYearGreetings(env);await prepareNewsletterDeliveries(env);await drainNotifications(env);if(env.APP_ENV==='staging'||liveEnabled(env)){await expireReservations(env);await reconcilePayments(env);await reconcileEcpay(env);}},
   async fetch(request,env,ctx) {
     const url=new URL(request.url);
     try{
@@ -366,7 +374,7 @@ export default {
         if(/^\/category-(craft|special)(?:\.html)?\/?$/.test(url.pathname))return new Response(null,{status:302,headers:{Location:'/shop.html?category=pen','Cache-Control':'no-store'}});
         if(legacy)return new Response(null,{status:302,headers:{Location:'/product.html?family='+encodeURIComponent('product-'+legacy[1]),'Cache-Control':'no-store'}});
         response=await env.ASSETS.fetch(request);
-        if(env.APP_ENV==='staging'&&response.headers.get('Content-Type')?.includes('text/html')&&!url.pathname.startsWith('/admin'))response=new HTMLRewriter().on('body',{element(el){el.prepend('<aside role="note" style="background:#fff1c2;color:#342300;padding:12px 16px;text-align:center;font:600 16px/1.5 sans-serif">網站建置中｜尚未開放正式收款，請勿匯款。</aside>',{html:true});}}).transform(response);
+        if(env.APP_ENV==='staging'&&!liveEnabled(env)&&response.headers.get('Content-Type')?.includes('text/html')&&!url.pathname.startsWith('/admin'))response=new HTMLRewriter().on('body',{element(el){el.prepend('<aside role="note" style="background:#fff1c2;color:#342300;padding:12px 16px;text-align:center;font:600 16px/1.5 sans-serif">網站建置中｜尚未開放正式收款，請勿匯款。</aside>',{html:true});}}).transform(response);
       }
       const result=new Response(response.body,response);
       result.headers.set('X-Content-Type-Options','nosniff');result.headers.set('Referrer-Policy','same-origin');result.headers.set('X-Frame-Options','DENY');

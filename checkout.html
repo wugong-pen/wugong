@@ -257,7 +257,6 @@
           <label for="country">收件國家／地區 *</label><select id="country" required></select><p style="font-size:14px;color:#bbb">僅顯示已開放配送的地區。運費依收件地區計算；台灣運費 NT$60，商品折扣後滿 NT$3,000 免運。海外不寄墨水（含贈品）。海外運費不含進口關稅，關稅由收件人另行負擔。</p></div><div class="field"><label for="shipping">配送方式 *</label>
           <select id="shipping">
             <option value="宅配">宅配</option>
-            <option value="超商取貨">超商取貨</option>
           </select>
         </div>
 
@@ -277,19 +276,19 @@
 
         <label class="radio-box">
           <input type="radio" name="payment" value="bank" disabled>
-          銀行匯款（測試，3 天內）
+          自行匯款（3 天內）
         </label>
 
         <label class="radio-box">
           <input type="radio" name="payment" value="ecpay" disabled>
-          信用卡（暫停測試）
+          綠界信用卡
         </label>
 
         <label class="radio-box">
-          <input type="radio" name="payment" value="linepay" disabled>
-          LINE Pay（設定完成後開放測試）
+          <input type="radio" name="payment" value="ecpay_twqr" disabled>
+          歐付寶 TWQR
         </label>
-        <label class="radio-box"><input type="radio" name="payment" value="paypal_invoice" disabled>海外訂單・確認後另寄 PayPal 帳單（目前為流程測試）</label>
+        <label class="radio-box"><input type="radio" name="payment" value="paypal_invoice" disabled>海外訂單・確認後另寄 PayPal 帳單</label>
       </section>
 
     </div>
@@ -315,7 +314,7 @@
       </button>
 
       <div class="notice">
-        請僅使用測試帳號及測試卡，銀行匯款請勿匯款。<br>
+        付款成功並確認備貨後安排寄送，出貨時另寄 Email 通知。<br>
         運費依收件地區另計。目前不會出貨；正式收款尚未開放。
       </div>
 

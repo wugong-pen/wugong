@@ -1,3 +1,4 @@
+import {liveEnabled,requireLiveOrder} from './live-payments.js';
 import {COUNTRY_CODES} from './countries.js';
 import {lockPayment,settlePayment} from './inventory.js';
 import {createHmac} from 'node:crypto';
@@ -6,11 +7,11 @@ const fail=(status,message)=>{throw Object.assign(new Error(message),{status});}
 const origin='https://wugong-test.wugong-pen.workers.dev';
 // Provider capability only; checkout additionally requires an enabled shipping region.
 export function methods(env,country){
- const test=env.APP_ENV==='staging';
- return {paypal_invoice:test&&country!=='TW'&&COUNTRY_CODES.includes(country),ecpay:false,bank:test&&country==='TW'&&!!bankConfig(env),linepay:false,paypal:test&&country!=='TW'&&COUNTRY_CODES.includes(country)&&!!(env.PAYPAL_SANDBOX_CLIENT_ID&&env.PAYPAL_SANDBOX_CLIENT_SECRET)};
+ const live=liveEnabled(env),test=env.APP_ENV==='staging'&&!live;
+ return {paypal_invoice:(test||live)&&country!=='TW'&&COUNTRY_CODES.includes(country),ecpay:live&&country==='TW'&&!!(env.ECPAY_MERCHANT_ID&&env.ECPAY_HASH_KEY&&env.ECPAY_HASH_IV),ecpay_twqr:live&&country==='TW'&&env.ECPAY_TWQR_ENABLED==='true'&&!!(env.ECPAY_MERCHANT_ID&&env.ECPAY_HASH_KEY&&env.ECPAY_HASH_IV),bank:(test||live)&&country==='TW'&&!!bankConfig(env),linepay:false,paypal:test&&country!=='TW'&&COUNTRY_CODES.includes(country)&&!!(env.PAYPAL_SANDBOX_CLIENT_ID&&env.PAYPAL_SANDBOX_CLIENT_SECRET)};
 }
 export function bankConfig(env){
- try{const b=JSON.parse(env.BANK_TEST_CONFIG||'null');return b&&['bank','code','branch','holder','account'].every(k=>typeof b[k]==='string'&&b[k].trim())&&Number.isInteger(b.days)&&b.days>=1&&b.days<=30?b:null;}catch{return null;}
+ try{const b=JSON.parse((liveEnabled(env)?env.BANK_CONFIG:env.BANK_TEST_CONFIG)||'null');return b&&['bank','code','branch','holder','account'].every(k=>typeof b[k]==='string'&&b[k].trim())&&Number.isInteger(b.days)&&b.days>=1&&b.days<=30?b:null;}catch{return null;}
 }
 export function lineSignature(secret,path,body,nonce){return createHmac('sha256',secret).update(secret+path+body+nonce).digest('base64');}
 export function parseLine(text){return JSON.parse(text.replace(/("transactionId"\s*:\s*)(\d+)/g,'$1"$2"'));}
@@ -29,7 +30,7 @@ export function validRedirect(provider,value){
  try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.port===''&&u.hostname===(provider==='linepay'?'sandbox-web-pay.line.me':'www.sandbox.paypal.com');}catch{return false;}
 }
 export async function start(order,env){
- sandbox(env);if(env.PAYMENT_ORIGIN!==origin)fail(503,'測試付款網址尚未設定');
+ sandbox(env);if(liveEnabled(env))await requireLiveOrder(env,order);if(env.PAYMENT_ORIGIN!==origin)fail(503,'測試付款網址尚未設定');
  if(methods(env,order.shipping_country)[order.payment]!==true)fail(503,'此付款方式尚未設定或不適用收件國家');
  if(order.status!=='pending')fail(409,'請查看訂單付款狀態');
  if(order.payment==='paypal_invoice')fail(409,'此訂單由管理員另寄 PayPal 帳單，請查看會員中心');
@@ -64,6 +65,7 @@ export function paypalApproved(result,order,id){
 }
 export async function confirm(order,env,data){
  sandbox(env);
+ if(liveEnabled(env))fail(503,'此付款方式目前暫停');
  if(order.payment!=='paypal')fail(503,'此付款方式目前暫停');
  const p=await env.DB.prepare('SELECT * FROM payment_attempts WHERE order_number=?').bind(order.order_number).first();
  if(!p||p.state!==data.state||p.provider!==order.payment||!p.provider_id||!['linepay','paypal'].includes(order.payment))fail(400,'付款驗證資料不符');
@@ -89,7 +91,7 @@ export async function confirm(order,env,data){
 }
 
 export async function reconcilePayments(env){
- if(env.APP_ENV!=='staging'||!env.PAYPAL_SANDBOX_CLIENT_ID||!env.PAYPAL_SANDBOX_CLIENT_SECRET)return;
+ if(liveEnabled(env)||env.APP_ENV!=='staging'||!env.PAYPAL_SANDBOX_CLIENT_ID||!env.PAYPAL_SANDBOX_CLIENT_SECRET)return;
  const rows=await env.DB.prepare("SELECT o.*,p.provider_id FROM orders o JOIN payment_attempts p ON p.order_number=o.order_number JOIN checkout_reservations r ON r.order_number=o.order_number WHERE o.status='pending' AND p.provider='paypal' AND p.provider_id IS NOT NULL AND r.state='paying' ORDER BY COALESCE((SELECT checked_at FROM payment_checks WHERE order_number=o.order_number),'') LIMIT 10").all();
  for(const order of rows.results){
   try{
