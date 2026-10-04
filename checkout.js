@@ -1,3 +1,4 @@
+import {setupStore,restoreStore,syncStore,storeToken} from './checkout-store.js';
 import {loadItemTranslations} from './i18n.js';
 import {countryOptions} from './countries.js';
 const $=id=>document.getElementById(id);
@@ -19,15 +20,16 @@ $('applyCoupon').onclick=async()=>{
  try{const r=await fetch('/api/checkout/quote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:cart(),coupon:$('checkoutCoupon').value.trim(),firstCoupon:$('firstCoupon').value.trim(),country:$('country').value,phone:$('phone').value})}),d=await r.json();if(seq!==quoteSequence)return;if(!r.ok)throw Error(d.error);couponCode=d.coupon||'';firstCouponCode=d.firstGift?.code||'';applyQuote(d);$('couponSummary').textContent=couponCode?'已套用 '+couponCode+'，折抵 NT$'+d.discount.toLocaleString()+(d.gift?'；贈送商品：'+d.gift:''):'未使用優惠券';showFirstGift(d.firstGift);show('結帳金額已更新。');}catch(e){show(e.message);}finally{busy=false;$('applyCoupon').disabled=false;await updateMethods();}
 };
 
-render();$('submitOrder').disabled=true;
-async function initialize(){try{const result=await(await fetch('/api/member',{cache:'no-store'})).json();if(!result.success)throw new Error();if(!result.member){location.replace('/member.html?next=checkout');return;}member=result.member;const regions=await(await fetch('/api/shipping')).json();if(!regions.success)throw Error(regions.error);countryOptions($('country'),'',regions.regions.map(r=>r.country));for(const key of ['name','phone','email','address','country'])$(key).value=member[key]||'';$('email').readOnly=true;const q=await(await fetch('/api/checkout/quote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:cart(),country:$('country').value,phone:$('phone').value})})).json();if(!q.success)throw new Error(q.error);localStorage.setItem('wugongCart',JSON.stringify(q.items.map(i=>({...i,image:cart().find(old=>old.id===i.id&&old.nib===i.nib)?.image}))));render();applyQuote(q);await updateMethods();show(`目前登入：${member.email}`);}catch(e){show(e.message||'無法確認登入狀態，請重新整理後再試。');}}
+setupStore(()=>member,show);render();$('submitOrder').disabled=true;
+async function initialize(){try{const result=await(await fetch('/api/member',{cache:'no-store'})).json();if(!result.success)throw new Error();if(!result.member){location.replace('/member.html?next=checkout');return;}member=result.member;const regions=await(await fetch('/api/shipping')).json();if(!regions.success)throw Error(regions.error);countryOptions($('country'),'',regions.regions.map(r=>r.country));for(const key of ['name','phone','email','address','country'])$(key).value=member[key]||'';$('email').readOnly=true;await restoreStore(member.id);const q=await(await fetch('/api/checkout/quote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:cart(),country:$('country').value,phone:$('phone').value,coupon:$('checkoutCoupon').value.trim(),firstCoupon:$('firstCoupon').value.trim()})})).json();if(!q.success)throw new Error(q.error);localStorage.setItem('wugongCart',JSON.stringify(q.items.map(i=>({...i,image:cart().find(old=>old.id===i.id&&old.nib===i.nib)?.image}))));render();couponCode=q.coupon||'';firstCouponCode=q.firstGift?.code||'';applyQuote(q);await updateMethods();show(`目前登入：${member.email}`);}catch(e){show(e.message||'無法確認登入狀態，請重新整理後再試。');}}
 $('submitOrder').addEventListener('click',async()=>{
   if(busy||!member||(!pendingOrder&&!shippingReady))return;
   if(pendingOrder){busy=true;try{await startPayment(pendingOrder);}catch(e){show(e.message);}finally{busy=false;}return;}
+  if($('shipping').value==='cvs'&&!storeToken()){show('請先透過地圖選擇取貨門市。');return;}
   for(const key of ['name','phone','email','country','address']){if(!$(key).reportValidity())return;}
   const items=cart();if(!items.length){show('請先將商品加入購物車。');return;}
   busy=true;$('submitOrder').disabled=true;show('正在送出訂單…');
-  try{const order={customer:{name:$('name').value,phone:$('phone').value,address:$('address').value,country:$('country').value},shipping:$('shipping').value,payment:document.querySelector('input[name=payment]:checked').value,note:$('note').value,items,expectedTotal,coupon:couponCode,firstCoupon:firstCouponCode};
+  try{const order={customer:{name:$('name').value,phone:$('phone').value,address:$('address').value,country:$('country').value},shipping:$('shipping').value,storeToken:storeToken(),payment:document.querySelector('input[name=payment]:checked').value,note:$('note').value,items,expectedTotal,coupon:couponCode,firstCoupon:firstCouponCode};
     const response=await fetch('/api/order',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':requestKey},body:JSON.stringify(order)});const result=await response.json();
     if(response.status===401){location.assign('/member.html?next=checkout');return;}
     if(!response.ok||!result.success)throw new Error(result.error||'訂單送出失敗');
@@ -38,7 +40,7 @@ window.addEventListener('pageshow',event=>{if(event.persisted)initialize();});in
 
 async function updateMethods(){
  $('submitOrder').disabled=true;
- const country=$('country').value,seq=quoteSequence;$('shipping').options[0].textContent=country==='TW'?'宅配':'海外郵寄／快遞';const r=await fetch('/api/payments/methods?country='+encodeURIComponent(country));const data=await r.json();if(seq!==quoteSequence||country!==$('country').value)return;
+ const country=$('country').value,seq=quoteSequence;$('shipping').options[0].textContent=country==='TW'?'宅配':'海外郵寄／快遞';syncStore();const r=await fetch('/api/payments/methods?country='+encodeURIComponent(country));const data=await r.json();if(seq!==quoteSequence||country!==$('country').value)return;
  if(!r.ok||!data.success)throw new Error(data.error||'無法載入付款方式');
  const inputs=[...document.querySelectorAll('input[name=payment]')];
  for(const input of inputs){input.disabled=!data.methods[input.value]||(input.value==='ecpay_twqr'&&(expectedTotal<6||expectedTotal>49999));input.closest('label').hidden=input.disabled;if(input.disabled)input.checked=false;}

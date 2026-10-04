@@ -53,3 +53,29 @@ export async function manageShipping(request,env,url,m,body){
  await env.DB.batch([stmt,env.DB.prepare('INSERT INTO catalog_checks(ok) SELECT CASE WHEN changes()=1 THEN 1 ELSE 0 END'),env.DB.prepare('INSERT INTO commerce_audit VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),m.id,'shipping.update',d.country,JSON.stringify(old),JSON.stringify(d),'配送設定',new Date().toISOString())]);
  return {country:d.country};
 }
+
+export const CVS_TYPES={UNIMARTC2C:'7-ELEVEN',FAMIC2C:'全家'};
+export async function storeSchema(env){await env.DB.prepare('CREATE TABLE IF NOT EXISTS cvs_selections(token TEXT PRIMARY KEY,member_id TEXT NOT NULL,subtype TEXT NOT NULL,expires INTEGER NOT NULL,store_id TEXT,store_name TEXT,address TEXT,used_order TEXT)').run();}
+export async function startStoreMap(env,member,data,origin){
+ if(env.PAYMENTS_LIVE!=='true'||!env.ECPAY_MERCHANT_ID)fail(503,'超商選店尚未啟用');
+ if(!Object.hasOwn(CVS_TYPES,data.subtype))fail(400,'請選擇 7-ELEVEN 或全家');
+ await storeSchema(env);const token=Array.from(crypto.getRandomValues(new Uint8Array(10)),n=>n.toString(16).padStart(2,'0')).join('');
+ await env.DB.prepare('DELETE FROM cvs_selections WHERE expires<? AND used_order IS NULL').bind(Date.now()).run();
+ await env.DB.prepare('INSERT INTO cvs_selections(token,member_id,subtype,expires) VALUES (?,?,?,?)').bind(token,member.id,data.subtype,Date.now()+3600000).run();
+ return {action:'https://logistics.ecpay.com.tw/Express/map',fields:{MerchantID:env.ECPAY_MERCHANT_ID,MerchantTradeNo:token,LogisticsType:'CVS',LogisticsSubType:data.subtype,IsCollection:'N',ServerReplyURL:origin+'/cvs/return',ExtraData:token,Device:data.mobile?'1':'0'}};
+}
+export async function storeMapReturn(request,env){
+ if(request.method!=='POST')fail(405,'請從超商地圖返回');
+ const raw=await request.text();if(raw.length>8192)fail(400,'門市資料過長');const params=new URLSearchParams(raw);for(const key of params.keys())if(params.getAll(key).length!==1)fail(400,'重複門市資料');const d=Object.fromEntries(params),token=d.ExtraData;
+ if(!/^[a-f0-9]{20}$/.test(token||'')||d.MerchantID!==env.ECPAY_MERCHANT_ID||!Object.hasOwn(CVS_TYPES,d.LogisticsSubType)||!/^\d{1,9}$/.test(d.CVSStoreID||''))fail(400,'門市回傳資料不正確');
+ for(const [key,max]of [['CVSStoreName',100],['CVSAddress',300]])if(!d[key]?.trim()||d[key].length>max||/[\x00-\x1f<>]/.test(d[key]))fail(400,'門市資料不正確');
+ await storeSchema(env);const result=await env.DB.prepare('UPDATE cvs_selections SET store_id=?,store_name=?,address=? WHERE token=? AND subtype=? AND expires>? AND store_id IS NULL AND used_order IS NULL').bind(d.CVSStoreID,d.CVSStoreName.trim(),d.CVSAddress.trim(),token,d.LogisticsSubType,Date.now()).run();
+ if(!result.meta.changes)fail(409,'選店已失效，請重新選店');
+ return new Response(null,{status:303,headers:{Location:'/checkout?store='+token,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
+}
+export async function selectedStore(env,member,token){
+ if(!/^[a-f0-9]{20}$/.test(token||''))fail(400,'請先透過地圖選擇門市');await storeSchema(env);
+ const row=await env.DB.prepare('SELECT * FROM cvs_selections WHERE token=? AND member_id=? AND expires>? AND store_id IS NOT NULL AND used_order IS NULL').bind(token,member.id,Date.now()).first();if(!row)fail(400,'門市選擇已過期，請重新選店');
+ return {token:row.token,subtype:row.subtype,storeId:row.store_id,name:row.store_name,address:row.address,brand:CVS_TYPES[row.subtype]};
+}
+export function storeStatements(env,store,member,number){return store?[env.DB.prepare('UPDATE cvs_selections SET used_order=? WHERE token=? AND member_id=? AND used_order IS NULL AND expires>?').bind(number,store.token,member.id,Date.now()),env.DB.prepare('INSERT INTO catalog_checks(ok) SELECT CASE WHEN changes()=1 THEN 1 ELSE 0 END')]:[];}
