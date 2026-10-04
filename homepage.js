@@ -1,6 +1,7 @@
+import {renderSocial} from './homepage-social.js';
 import {applyHomepage} from './homepage-config.js';
 import {renderHomepageMedia} from './homepage-media.js';
-function apply(config){applyHomepage(config);renderHomepageMedia(config.media||[]);}
+function apply(config){applyHomepage(config);renderHomepageMedia(config.media||[]);renderSocial(config.social);}
 const preview=new URLSearchParams(location.search).get('homepage-preview')==='1'&&parent!==window;
 if(preview){
  document.addEventListener('click',e=>{if(e.target.closest('#homepage-media'))return;e.preventDefault();e.stopImmediatePropagation();},true);

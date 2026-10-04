@@ -1,3 +1,4 @@
+import {socialDefaults} from './homepage-social.js';
 import {defaults,textFields,validateHomepage} from './homepage-config.js';
 import {renderMediaEditor} from './admin-home-media.js';
 export async function init({api,node,message}){
@@ -44,6 +45,9 @@ export async function init({api,node,message}){
   field(grid,'照片暗色遮罩（0 至 90，越大越暗）',draft.overlay,'number',v=>draft.overlay=v,{min:0,max:90});
   field(grid,'頁面背景顏色',draft.background,'color',v=>draft.background=v);field(grid,'作品系列／工藝介紹區背景',draft.sectionBackground,'color',v=>draft.sectionBackground=v);
   renderMediaEditor({parent:form,draft,node,field,button,changed,run,message});
+  draft.social??=socialDefaults();form.append(node('h2','首頁與頁尾社群連結'),node('p','貼上官方頁面網址；開啟顯示後，訪客點擊會另開分頁。修改後請儲存首頁。'));
+  for(const [key,label] of [['facebook','Facebook'],['instagram','Instagram']]){field(form,label+' 網址',draft.social[key].url,'url',v=>draft.social[key].url=v,{maxLength:2000});field(form,'顯示 '+label,String(draft.social[key].enabled),'select',v=>draft.social[key].enabled=v==='true',{choices:[['true','顯示'],['false','隱藏']]});}
+
   form.append(node('h2','文字、字體大小與顏色'));
   for(const [id,label] of textFields){const details=node('details');details.open=['title','subtitle','description'].includes(id);details.append(node('summary',label));const group=node('div');group.className='home-text-group';details.append(group);form.append(details);
    field(group,'文字內容',draft.texts[id].text,'textarea',v=>draft.texts[id].text=v,{maxLength:2000});const row=node('div');row.className='form-grid';group.append(row);
