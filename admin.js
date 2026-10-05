@@ -38,6 +38,7 @@ async function loadDetail(){
   const factoryPanel=node('section');factoryPanel.id='factory-date-panel';factoryPanel.className='card';const factoryLabel=node('label','出廠日期（請與隨貨保固卡一致）'),factoryInput=node('input');factoryInput.type='date';factoryInput.id='factory-date';factoryInput.value=o.factory_date||'';factoryInput.max=new Date(Date.now()+8*3600000).toISOString().slice(0,10);factoryInput.required=true;factoryInput.disabled=!(o.status==='paid'||o.status==='test_paid'&&!o.live_mode);factoryLabel.append(factoryInput);factoryPanel.append(factoryLabel,node('p','保固期間：自出廠日期起一年。標記出貨時儲存，並寫入買家出貨通知信。'));$('advance').before(factoryPanel);
   message('');
   await orderManagement(o.order_number);
+  await (await import('./admin-logistics.js')).renderLogistics({api,node,message,o,reload:loadDetail});
   await (await import('./admin-notifications.js')).renderNotifications({api,node,order:o.order_number});
   document.getElementById('manual-invoice')?.remove();
   document.getElementById('bank-confirm')?.remove();
@@ -57,6 +58,7 @@ if(document.body.dataset.page==='login'){
  try{const {admin}=await api('/api/admin/session');$('identity').textContent=admin.email;
   if(document.body.dataset.page==='manage'){await (await import('./admin-manage.js')).init({api,node,message});}
   else if(document.body.dataset.page==='orders'){
+   await (await import('./admin-logistics.js')).renderLogistics({api,node,message});
    await (await import('./admin-notifications.js')).renderNotifications({api,node});
    const search=node('form');search.className='search-form';const input=node('input');input.id='order-search';input.placeholder='搜尋訂單編號、收件人或信箱';input.maxLength=100;input.setAttribute('aria-label','搜尋訂單');const select=node('select');select.id='order-status';select.setAttribute('aria-label','訂單狀態');for(const [v,label]of [['','全部狀態'],...Object.entries(labels)]){const option=node('option',label);option.value=v;select.append(option);}const submit=node('button','篩選');search.append(input,select,submit);$('message').after(search);search.onsubmit=e=>{e.preventDefault();page=1;loadOrders();};
    $('refresh').onclick=loadOrders;$('previous').onclick=()=>{page--;loadOrders();};$('next').onclick=()=>{page++;loadOrders();};await loadOrders();}

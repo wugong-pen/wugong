@@ -1,10 +1,10 @@
-import {setupStore,restoreStore,syncStore,storeToken} from './checkout-store.js';
+import {setupStore,restoreStore,syncStore,storeToken,setStoreAmount,manualStore,validateManualStore} from './checkout-store.js';
 import {loadItemTranslations} from './i18n.js';
 import {countryOptions} from './countries.js';
 const $=id=>document.getElementById(id);
 let member=null,busy=false,expectedTotal=null,pendingOrder=null,pendingPayment=null;
 let couponCode='',firstCouponCode='',shippingReady=false,quoteSequence=0;
-function applyQuote(d){shippingReady=d.shippingReady===true;expectedTotal=shippingReady?d.total:null;$('subtotal').textContent='NT$'+d.subtotal.toLocaleString();$('total').textContent=shippingReady?'NT$'+d.total.toLocaleString():'待確認運費';$('shippingSummary').textContent=shippingReady?'運費：NT$'+d.shippingFee.toLocaleString():d.shippingMessage;showFirstGift(d.firstGift);}
+function applyQuote(d){setStoreAmount(d.total-(d.shippingFee||0));shippingReady=d.shippingReady===true;expectedTotal=shippingReady?d.total:null;$('subtotal').textContent='NT$'+d.subtotal.toLocaleString();$('total').textContent=shippingReady?'NT$'+d.total.toLocaleString():'待確認運費';$('shippingSummary').textContent=shippingReady?'運費：NT$'+d.shippingFee.toLocaleString():d.shippingMessage;showFirstGift(d.firstGift);}
 const requestKey=crypto.randomUUID();
 const message=$('checkoutMessage');
 function show(value){message.textContent=value;}
@@ -25,11 +25,13 @@ async function initialize(){try{const result=await(await fetch('/api/member',{ca
 $('submitOrder').addEventListener('click',async()=>{
   if(busy||!member||(!pendingOrder&&!shippingReady))return;
   if(pendingOrder){busy=true;try{await startPayment(pendingOrder);}catch(e){show(e.message);}finally{busy=false;}return;}
+  if(!$('shipping').value){show('請選擇配送方式。');return;}
+  if(!validateManualStore())return;
   if($('shipping').value==='cvs'&&!storeToken()){show('請先透過地圖選擇取貨門市。');return;}
   for(const key of ['name','phone','email','country','address']){if(!$(key).reportValidity())return;}
   const items=cart();if(!items.length){show('請先將商品加入購物車。');return;}
   busy=true;$('submitOrder').disabled=true;show('正在送出訂單…');
-  try{const order={customer:{name:$('name').value,phone:$('phone').value,address:$('address').value,country:$('country').value},shipping:$('shipping').value,storeToken:storeToken(),payment:document.querySelector('input[name=payment]:checked').value,note:$('note').value,items,expectedTotal,coupon:couponCode,firstCoupon:firstCouponCode};
+  try{const order={customer:{name:$('name').value,phone:$('phone').value,address:$('address').value,country:$('country').value},shipping:$('shipping').value,storeToken:storeToken(),manualStore:manualStore(),payment:document.querySelector('input[name=payment]:checked').value,note:$('note').value,items,expectedTotal,coupon:couponCode,firstCoupon:firstCouponCode};
     const response=await fetch('/api/order',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':requestKey},body:JSON.stringify(order)});const result=await response.json();
     if(response.status===401){location.assign('/member.html?next=checkout');return;}
     if(!response.ok||!result.success)throw new Error(result.error||'訂單送出失敗');

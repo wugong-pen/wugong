@@ -1,3 +1,4 @@
+import {createLogistics,logisticsMac,logisticsNotify,printLogistics,queryLogistics,createFields} from './logistics.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
@@ -9,7 +10,7 @@ import {firstGiftQuote,firstGiftStatements,firstGiftForOrder} from './first-purc
 const require=createRequire(import.meta.url);
 const {Miniflare,convertV4MiniflareOptions}=require(require.resolve('miniflare',{paths:[require.resolve('wrangler')]}));
 test('live bank checkout, buyer report, administrator settlement and shipment notifications',async()=>{
- const mf=new Miniflare(convertV4MiniflareOptions({modules:[{type:'ESModule',path:fileURLToPath(new URL('./worker.js',import.meta.url)),contents:readFileSync(new URL('./worker.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./first-purchase.js',import.meta.url)),contents:readFileSync(new URL('./first-purchase.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./countries.js',import.meta.url)),contents:readFileSync(new URL('./countries.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./ecpay.js',import.meta.url)),contents:readFileSync(new URL('./ecpay.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./payments.js',import.meta.url)),contents:readFileSync(new URL('./payments.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./inventory.js',import.meta.url)),contents:readFileSync(new URL('./inventory.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./commerce.js',import.meta.url)),contents:readFileSync(new URL('./commerce.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./modules.js',import.meta.url)),contents:readFileSync(new URL('./modules.js',import.meta.url),'utf8')},...['live-payments.js','newsletter-store.js','newsletter-model.js','nib-guide-store.js','nib-guide-model.js','product-translations.js','order-notifications.js','manual-invoice.js','shipping.js','homepage-store.js','homepage-social.js','homepage-config.js','content-store.js','content-model.js'].map(f=>({type:'ESModule',path:fileURLToPath(new URL(f,import.meta.url)),contents:readFileSync(new URL(f,import.meta.url),'utf8')}))],compatibilityDate:'2026-09-07',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],bindings:{APP_ENV:'staging',PAYMENTS_LIVE:'true',ECPAY_MERCHANT_ID:'3442057',MAIL_FROM:'shop@example.test',MAIL_ORIGIN:'https://shop.test',PAYMENT_ORIGIN:'https://wugong-test.wugong-pen.workers.dev',BANK_CONFIG:JSON.stringify({bank:'Bank',code:'009',branch:'Branch',holder:'Holder',account:'123456789',days:3})}}));
+ const mf=new Miniflare(convertV4MiniflareOptions({modules:[{type:'ESModule',path:fileURLToPath(new URL('./worker.js',import.meta.url)),contents:readFileSync(new URL('./worker.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./first-purchase.js',import.meta.url)),contents:readFileSync(new URL('./first-purchase.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./countries.js',import.meta.url)),contents:readFileSync(new URL('./countries.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./ecpay.js',import.meta.url)),contents:readFileSync(new URL('./ecpay.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./payments.js',import.meta.url)),contents:readFileSync(new URL('./payments.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./inventory.js',import.meta.url)),contents:readFileSync(new URL('./inventory.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./commerce.js',import.meta.url)),contents:readFileSync(new URL('./commerce.js',import.meta.url),'utf8')},{type:'ESModule',path:fileURLToPath(new URL('./modules.js',import.meta.url)),contents:readFileSync(new URL('./modules.js',import.meta.url),'utf8')},...['logistics.js','live-payments.js','newsletter-store.js','newsletter-model.js','nib-guide-store.js','nib-guide-model.js','product-translations.js','order-notifications.js','manual-invoice.js','shipping.js','homepage-store.js','homepage-social.js','homepage-config.js','content-store.js','content-model.js'].map(f=>({type:'ESModule',path:fileURLToPath(new URL(f,import.meta.url)),contents:readFileSync(new URL(f,import.meta.url),'utf8')}))],compatibilityDate:'2026-09-07',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],bindings:{APP_ENV:'staging',PAYMENTS_LIVE:'true',ECPAY_MERCHANT_ID:'3442057',MAIL_FROM:'shop@example.test',MAIL_ORIGIN:'https://shop.test',PAYMENT_ORIGIN:'https://wugong-test.wugong-pen.workers.dev',BANK_CONFIG:JSON.stringify({bank:'Bank',code:'009',branch:'Branch',holder:'Holder',account:'123456789',days:3})}}));
  try{
   const db=await mf.getD1Database('DB');
   const schema=readFileSync(new URL('./schema-members.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'');
@@ -42,6 +43,8 @@ test('live bank checkout, buyer report, administrator settlement and shipment no
 
  const post=(path,data,h=headers)=>mf.dispatchFetch('https://shop.test'+path,{method:'POST',headers:h,body:JSON.stringify(data)});
  const checkout={customer:{name:'Buyer',phone:'0900000000',address:'Address',country:'TW'},items:[{id:'pojun-單尖',nib:'單尖',quantity:1}],expectedTotal:25000,payment:'bank',shipping:'cvs',storeToken:mapData.fields.ExtraData};
+ const overLimit=await post('/api/order',checkout,{...headers,'Idempotency-Key':'over-limit-fixture-0001'});assert.equal(overLimit.status,400);assert.match((await overLimit.json()).error,/20,000/);
+ await db.prepare("UPDATE products SET price=15000 WHERE sku='pojun-單尖'").run();checkout.expectedTotal=15000;
  const placed=await post('/api/order',checkout,{...headers,'Idempotency-Key':'live-order-fixture-0001'});assert.equal(placed.status,200,await placed.clone().text());const {orderNumber}=await placed.json();
  const savedStore=await db.prepare('SELECT address,shipping FROM orders WHERE order_number=?').bind(orderNumber).first();assert.match(savedStore.address,/123456/);assert.match(savedStore.shipping,/全家/);assert.equal((await mf.dispatchFetch('https://shop.test/api/cvs/selection?token='+mapData.fields.ExtraData,{headers})).status,400);
  const attempt=await db.prepare('SELECT * FROM payment_attempts WHERE order_number=?').bind(orderNumber).first();assert.equal(JSON.parse(attempt.bank_details).account,'123456789');
@@ -50,13 +53,48 @@ test('live bank checkout, buyer report, administrator settlement and shipment no
  const reported=await post('/api/payments/bank/report',report);assert.equal(reported.status,200,await reported.clone().text());
  const again=await post('/api/payments/bank/report',report);assert.equal(again.status,200);
  assert.equal((await db.prepare('SELECT status FROM orders WHERE order_number=?').bind(orderNumber).first()).status,'pending');
- const proof={orderNumber,reference:'BANK-REF-001',amount:25000,confirmed:true};
+ const proof={orderNumber,reference:'BANK-REF-001',amount:15000,confirmed:true};
  assert.equal((await post('/api/admin/bank/confirm',proof)).status,403);
  const badOrigin=await post('/api/admin/bank/confirm',proof,{...adminHeaders,Origin:'https://evil.test'});assert.equal(badOrigin.status,403);
  const paid=await post('/api/admin/bank/confirm',proof,adminHeaders);assert.equal(paid.status,200,await paid.clone().text());
  assert.equal((await post('/api/admin/bank/confirm',proof,adminHeaders)).status,409);
+ const logEnv={DB:db,PAYMENTS_LIVE:'true',ECPAY_MERCHANT_ID:'3442057',ECPAY_LOGISTICS_HASH_KEY:'fixture-key-only',ECPAY_LOGISTICS_HASH_IV:'fixture-iv-only',PAYMENT_ORIGIN:'https://shop.test'};
+ const logAdmin={id:result.member.id};
+ assert.equal((await mf.dispatchFetch('https://shop.test/api/admin/logistics',{headers})).status,403);
+ assert.equal((await post('/api/admin/logistics',{action:'settings',sender_name:'寄件者',sender_phone:'0900000000',version:0},{...adminHeaders,Origin:'https://evil.test'})).status,403);
+ const setting=await post('/api/admin/logistics',{action:'settings',sender_name:'寄件者',sender_phone:'0900000000',version:0},adminHeaders);assert.equal(setting.status,200,await setting.clone().text());
+ const paidOrder=await db.prepare('SELECT * FROM orders WHERE order_number=?').bind(orderNumber).first();await assert.rejects(Promise.resolve().then(()=>createFields(logEnv,paidOrder,{subtype:'FAMIC2C',store_id:'123456'},{sender_name:'寄件者',sender_phone:'0900000000'},25000,'test')),/20,000/);
+ // Isolated fixture value: verify successful pure-pickup creation without any external call.
+ await db.prepare('UPDATE orders SET total=15000 WHERE order_number=?').bind(orderNumber).run();
+ await db.prepare('UPDATE payment_receipts SET amount=15000 WHERE order_number=?').bind(orderNumber).run();
+ const orderBefore=await db.prepare('SELECT * FROM orders WHERE order_number=?').bind(orderNumber).first();
+ await assert.rejects(Promise.resolve().then(()=>createFields(logEnv,{...orderBefore,customer_name:'x'},{subtype:'FAMIC2C',store_id:'123456'},{sender_name:'寄件者',sender_phone:'0900000000'},15000,'test')),/收件姓名/);
+ let calls=0,notice;
+ const send=async(url,options)=>{calls++;assert.equal(url,'https://logistics.ecpay.com.tw/Express/Create');const f=Object.fromEntries(new URLSearchParams(options.body));assert.equal(f.IsCollection,'N');assert.equal(f.ReceiverStoreID,'123456');assert.equal(f.GoodsAmount,'15000');assert.equal(f.CheckMacValue,logisticsMac(f,logEnv.ECPAY_LOGISTICS_HASH_KEY,logEnv.ECPAY_LOGISTICS_HASH_IV));notice={MerchantID:f.MerchantID,MerchantTradeNo:f.MerchantTradeNo,AllPayLogisticsID:'123456789',LogisticsType:'CVS',LogisticsSubType:'FAMIC2C',GoodsAmount:'15000',RtnCode:'300',RtnMsg:'Created',UpdateStatusDate:'2026/10/05 10:00:00',CVSPaymentNo:'123456789012',CVSValidationNo:''};notice.CheckMacValue=logisticsMac(notice,logEnv.ECPAY_LOGISTICS_HASH_KEY,logEnv.ECPAY_LOGISTICS_HASH_IV);return new Response('1|'+new URLSearchParams(notice));};
+ const built=await createLogistics(logEnv,logAdmin,orderNumber,send);assert.equal(built.state,'created');assert.equal(built.fields,undefined);
+ await createLogistics(logEnv,logAdmin,orderNumber,send);assert.equal(calls,1);
+ assert.equal((await db.prepare('SELECT status FROM orders WHERE order_number=?').bind(orderNumber).first()).status,'paid');
+ assert.equal((await db.prepare('SELECT tracking FROM order_management WHERE order_number=?').bind(orderNumber).first()).tracking,'123456789012');
+ const print=await printLogistics(logEnv,orderNumber);assert.equal(print.action,'https://logistics.ecpay.com.tw/Express/PrintFAMIC2COrderInfo');assert.equal(print.fields.CVSPaymentNo,'123456789012');
+ const badNotice=new Request('https://shop.test/logistics/notify',{method:'POST',body:new URLSearchParams({...notice,GoodsAmount:'1'})});assert.equal((await logisticsNotify(badNotice,logEnv)).status,400);
+ const sendNotice=async n=>{n.CheckMacValue=logisticsMac(n,logEnv.ECPAY_LOGISTICS_HASH_KEY,logEnv.ECPAY_LOGISTICS_HASH_IV);return logisticsNotify(new Request('https://shop.test/logistics/notify',{method:'POST',body:new URLSearchParams(n)}),logEnv);};
+ assert.equal(await(await sendNotice({...notice,RtnCode:'3018',RtnMsg:'Arrived',UpdateStatusDate:'2026/10/06 10:00:00'})).text(),'1|OK');
+ await sendNotice(notice);assert.equal((await db.prepare('SELECT status_code FROM logistics_orders WHERE order_number=?').bind(orderNumber).first()).status_code,'3018');
+ await assert.rejects(queryLogistics(logEnv,orderNumber,async()=>new Response('MerchantID=3442057&CheckMacValue=BAD')),/驗證/);
+ // Simulate a lost create reply: the durable row prevents a second purchase of logistics.
+ await db.prepare("UPDATE logistics_orders SET state='uncertain',logistics_id=NULL WHERE order_number=?").bind(orderNumber).run();
+ await assert.rejects(createLogistics(logEnv,logAdmin,orderNumber,send),/勿重複建立/);assert.equal(calls,1);
+ await queryLogistics(logEnv,orderNumber,async()=>{const q={...notice,LogisticsType:'CVS_FAMIC2C',LogisticsStatus:'3018'};delete q.LogisticsSubType;delete q.UpdateStatusDate;q.CheckMacValue=logisticsMac(q,logEnv.ECPAY_LOGISTICS_HASH_KEY,logEnv.ECPAY_LOGISTICS_HASH_IV);return new Response(new URLSearchParams(q));});
+ assert.equal((await db.prepare('SELECT state FROM logistics_orders WHERE order_number=?').bind(orderNumber).first()).state,'created');
+ await db.prepare("UPDATE products SET price=25000 WHERE sku='pojun-單尖'").run();
+ const manualCheckout={...checkout,expectedTotal:25000,shipping:'cvs_manual',storeToken:null,manualStore:{name:'人工買家',phone:'0900000001',brand:'UNIMARTC2C',storeName:'台北市 示範門市'}};
+ const manualResponse=await post('/api/order',manualCheckout,{...headers,'Idempotency-Key':'manual-cvs-fixture-0001'});assert.equal(manualResponse.status,200,await manualResponse.clone().text());const manualNumber=(await manualResponse.json()).orderNumber;
+ const manualOrder=await db.prepare('SELECT * FROM orders WHERE order_number=?').bind(manualNumber).first();assert.match(manualOrder.shipping,/人工寄出/);assert.match(manualOrder.address,/示範門市/);assert.equal(manualOrder.customer_name,'人工買家');assert.equal(manualOrder.phone,'0900000001');
+ const manualNotice=JSON.parse((await db.prepare('SELECT payload FROM order_notifications WHERE id=?').bind('new-order/'+manualNumber).first()).payload);assert.match(manualNotice.text,/人工寄出/);
+ assert.equal(await db.prepare('SELECT used_order FROM cvs_selections WHERE used_order=?').bind(manualNumber).first(),null);
+
  const ship=await post('/api/admin/order/status',{orderNumber,expectedStatus:'paid',status:'shipped',factoryDate:new Date(Date.now()+8*3600000).toISOString().slice(0,10)},adminHeaders);assert.equal(ship.status,200,await ship.clone().text());
- const rows=(await db.prepare('SELECT id,payload FROM order_notifications').all()).results;
+ const rows=(await db.prepare('SELECT id,payload FROM order_notifications WHERE id LIKE ?').bind('%'+orderNumber+'%').all()).results;
  for(const prefix of ['new-order/','buyer-confirmed/','bank-report/','buyer-paid/','buyer-shipped/','buyer-care/'])assert.equal(rows.filter(n=>n.id.startsWith(prefix)).length,1,prefix);
  assert.match(JSON.parse(rows.find(n=>n.id.startsWith('buyer-shipped/')).payload).text,/Factory date/);
  assert.equal((await db.prepare('SELECT status FROM orders WHERE order_number=?').bind(orderNumber).first()).status,'shipped');

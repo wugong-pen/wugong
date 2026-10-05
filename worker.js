@@ -1,3 +1,4 @@
+import {manageLogistics,logisticsNotify} from './logistics.js';
 import {liveEnabled,liveSchema,reportBank,confirmBank} from './live-payments.js';
 import {newsletterSchema,newsletterPreferenceStatement,memberNewsletter,manageNewsletters,prepareNewsletterDeliveries,newsletterUnsubscribe} from './newsletter-store.js';
 import {listGuides,manageGuides} from './nib-guide-store.js';
@@ -112,6 +113,7 @@ async function adminApi(request,env,url,ctx) {
     return json({success:true},200,{'Set-Cookie':adminCookie('',0)});
   }
   const m=await adminSession(request,env);
+  if(path==='/api/admin/logistics'){if(method!=='GET')await rate(env,`admin-logistics:${m.id}`,40);return json({success:true,...await manageLogistics(request,env,url,m,body)});}
   if(path==='/api/admin/newsletters'){if(method!=='GET')await rate(env,`admin-newsletter:${m.id}`,30);const result=await manageNewsletters(request,env,url,m,body);if(result.queued){const delivery=prepareNewsletterDeliveries(env).then(()=>drainNotifications(env)).catch(()=>console.error('Newsletter delivery deferred'));if(ctx?.waitUntil)ctx.waitUntil(delivery);else await delivery;}return json({success:true,...result});}
   if(path==='/api/admin/nib-guides'){if(method!=='GET')await rate(env,`admin-guide:${m.id}`,120);return json({success:true,...await manageGuides(request,env,url,m,body)});}
   if(['/api/admin/content','/api/admin/content-entry'].includes(path)){if(method!=='GET')await rate(env,`admin-content:${m.id}`,120);return json({success:true,...await manageContent(request,env,url,m,body)});}
@@ -326,18 +328,23 @@ async function api(request,env,url,ctx) {
     if(!key||!/^[a-zA-Z0-9-]{16,80}$/.test(key))fail(400,'請重新整理結帳頁後再試');
     const previous=await env.DB.prepare('SELECT order_number FROM member_orders WHERE member_id=? AND request_key=?').bind(m.id,key).first();
     if(previous)return json({success:true,orderNumber:previous.order_number});
-    const name=text(c.name,100,'收件人姓名'),phone=text(c.phone,40,'電話');
+    const manual=order.shipping==='cvs_manual'?order.manualStore:null;
+    if(order.shipping==='cvs_manual'&&(!manual||!['UNIMARTC2C','FAMIC2C'].includes(manual.brand)))fail(400,'請填寫人工超商取貨資料');
+    const manualBrand=manual?(manual.brand==='UNIMARTC2C'?'7-ELEVEN':'全家'):null;
+    const name=text(manual?manual.name:c.name,100,'收件人姓名'),phone=text(manual?manual.phone:c.phone,40,'電話');
     const store=order.shipping==='cvs'?await selectedStore(env,m,order.storeToken):null;
-    if(store&&(c.country!=='TW'||!['bank','ecpay'].includes(order.payment)))fail(400,'超商取貨限台灣信用卡或自行匯款');
-    if(store&&!/^09[0-9]{8}$/.test(phone))fail(400,'超商取貨請填寫 09 開頭的十碼手機號碼');
-    const address=store?`${store.brand} ${store.name}（門市代碼 ${store.storeId}） ${store.address}`:text(c.address,500,'收件地址');
+    if((store||manual)&&(c.country!=='TW'||!['bank','ecpay'].includes(order.payment)))fail(400,'超商取貨限台灣信用卡或自行匯款');
+    if((store||manual)&&!/^09[0-9]{8}$/.test(phone))fail(400,'超商取貨請填寫 09 開頭的十碼手機號碼');
+    const address=store?`${store.brand} ${store.name}（門市代碼 ${store.storeId}） ${store.address}`:manual?manualBrand+' '+text(manual.storeName,100,'門市名稱')+'（人工確認門市）':text(c.address,500,'收件地址');
     if(!COUNTRY_CODES.includes(c.country))fail(400,'請選擇收件國家／地區');
     sandbox(env);
     await expireReservations(env);
     const q=await shippingQuote(env,await discountQuote(env,await catalogQuote(env,order.items),order.coupon,m.id),c.country,true),{items,total}=q,number='WG'+random().slice(0,18);
+    if(store&&total-q.shippingFee>20000)fail(400,'商品金額超過 NT$20,000，請選擇郵局包裹或聯絡我們安排人工超商取貨');
+    if(manual&&total-q.shippingFee<=20000)fail(400,'請使用超商地圖選店');
     if(c.country!=='TW'&&(items.some(i=>i.category==='ink')||q.coupon?.kind==='gift'&&q.coupon.gift_kind==='ink'))fail(400,'墨水（含贈品）僅寄送台灣，請移除墨水商品或更換優惠券後再結帳');
     const firstGift=await firstGiftQuote(env,items,m.id,c.country,order.firstCoupon,phone);if(firstGift?.kind==='ink'&&c.country!=='TW')fail(400,'墨水贈品僅寄送台灣');
-    const shipping=store?store.brand+' 超商取貨（已付款後寄出／門市不收款）':c.country==='TW'?'宅配':'海外郵寄／快遞',payment=text(order.payment,30,'付款方式'),note=text(order.note??'',1000,'備註',false);
+    const shipping=store?store.brand+' 超商取貨（已付款後寄出／門市不收款）':manual?manualBrand+' 超商取貨（高額訂單／請聯絡買家確認門市／管理員人工寄出／門市不收款）':c.country==='TW'?(total-q.shippingFee>20000?'郵局包裹':'宅配'):'海外郵寄／快遞',payment=text(order.payment,30,'付款方式'),note=text(order.note??'',1000,'備註',false);
     if(methods(env,c.country)[payment]!==true)fail(400,'此付款方式尚未設定或不適用收件國家');
     if(payment==='ecpay_twqr'&&(total<6||total>49999))fail(400,'TWQR 單筆限 NT$6～49,999，請改用其他付款方式');
     if(order.expectedTotal!==total)fail(409,'商品金額或運費已更新，請重新整理後確認');
@@ -367,7 +374,8 @@ export default {
     const url=new URL(request.url);
     try{
       let response;
-      if(url.pathname==='/cvs/return')response=await storeMapReturn(request,env);
+      if(url.pathname==='/logistics/notify')response=await logisticsNotify(request,env);
+      else if(url.pathname==='/cvs/return')response=await storeMapReturn(request,env);
       else if(url.pathname==='/newsletter/unsubscribe')response=await newsletterUnsubscribe(request,env);
       else if(url.pathname==='/annual-greetings/unsubscribe')response=await annualUnsubscribe(request,env);
       else if(url.pathname==='/'&&url.searchParams.get('homepage-preview')==='1'&&!await adminSession(request,env,false))response=new Response(null,{status:303,headers:{Location:'/admin-login.html','Cache-Control':'no-store'}});
@@ -387,7 +395,7 @@ export default {
       result.headers.set('X-Content-Type-Options','nosniff');result.headers.set('Referrer-Policy','same-origin');result.headers.set('X-Frame-Options','DENY');
       if(/^\/(?:admin|api\/admin)/i.test(url.pathname)||['/api/orders','/api/order/status'].includes(url.pathname)) {
         result.headers.set('Cache-Control','no-store');result.headers.set('X-Robots-Tag','noindex, nofollow, noarchive');
-        result.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+        result.headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com; base-uri 'none'; form-action 'self' https://logistics.ecpay.com.tw; frame-ancestors 'none'");
       }
       if(env.APP_ENV==='staging')result.headers.set('X-Robots-Tag','noindex, nofollow, noarchive');
       if(url.pathname==='/'&&url.searchParams.get('homepage-preview')==='1'){result.headers.set('X-Frame-Options','SAMEORIGIN');result.headers.set('Content-Security-Policy',"frame-ancestors 'self'");result.headers.set('Cache-Control','no-store');result.headers.set('X-Robots-Tag','noindex, nofollow, noarchive');}
