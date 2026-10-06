@@ -189,6 +189,8 @@ export const translations = {
   "超商取貨": "Convenience-store pickup",
   "收件地址 *": "Shipping address *",
   "訂單備註": "Order notes",
+  "想跟我們說的話": "Anything you would like to tell us",
+  "選填，可留下您的需求或想告訴我們的事（最多 1,000 字）": "Optional: share your requests or a message with us (up to 1,000 characters)",
   "付款方式": "Payment Method",
   "銀行匯款（測試，3 天內）": "Bank transfer (test, within 3 days)",
   "信用卡（暫停測試）": "Credit card (testing paused)",
