@@ -1,3 +1,4 @@
+import {conversationPanel} from './order-conversation.js';
 import {loadItemTranslations} from './i18n.js';
 import {countryOptions} from './countries.js';
 const $=id=>document.getElementById(id);
@@ -47,8 +48,8 @@ card.append(node('h3',order.order_number),node('span',states[order.status]||'處
   card.append(list,node('p',`訂單金額 NT$${Number(order.total).toLocaleString('zh-TW')}`));
   const details=document.createElement('details');details.append(node('summary','查看收件與訂單資料'));const dl=document.createElement('dl');
   const region=new Intl.DisplayNames(['zh-Hant'],{type:'region'});
-  for(const [label,value]of [['收件人',order.customer_name],['電話',order.phone],['電子郵件',order.email],['收件國家',order.shipping_country==='TW'?'台灣':region.of(order.shipping_country)],['地址',order.address],['配送方式',order.shipping],['付款方式',payments[order.payment]||order.payment],['想跟我們說的話',(order.note||'').split('\n配送運費：')[0]||'無'],['備註',(order.note||'').includes('\n配送運費：')?'配送運費：'+order.note.split('\n配送運費：').slice(1).join('\n配送運費：'):'無']]){const detail=node('dd',value);if(['收件人','電話','電子郵件','地址','備註','想跟我們說的話'].includes(label))detail.setAttribute('translate','no');dl.append(node('dt',label),detail);}
-  details.append(dl);card.append(details);
+  for(const [label,value]of [['收件人',order.customer_name],['電話',order.phone],['電子郵件',order.email],['收件國家',order.shipping_country==='TW'?'台灣':region.of(order.shipping_country)],['地址',order.address],['配送方式',order.shipping],['付款方式',payments[order.payment]||order.payment],['備註',(order.note||'').includes('\n配送運費：')?'配送運費：'+order.note.split('\n配送運費：').slice(1).join('\n配送運費：'):'無']]){const detail=node('dd',value);if(['收件人','電話','電子郵件','地址','備註','想跟我們說的話'].includes(label))detail.setAttribute('translate','no');dl.append(node('dt',label),detail);}
+  details.append(dl);card.append(details,conversationPanel({api,order:order.order_number}));
   if(['bank','ecpay','ecpay_twqr'].includes(order.payment)&&order.status==='pending'){
    const link=node('a',order.payment==='bank'?'查看匯款資料／回報':'查看付款狀態／繼續付款');link.href='/payment-return.html?'+new URLSearchParams({order:order.order_number,provider:order.payment});card.append(link);
   }

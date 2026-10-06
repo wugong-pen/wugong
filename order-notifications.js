@@ -16,7 +16,7 @@ export function validateFactoryDate(value){
 export function notificationPayload(env,order){
  const link=(env.MAIL_ORIGIN||FALLBACK_ORIGIN)+'/admin-order-detail.html?order='+encodeURIComponent(order.order_number);
  const lines=order.items.map(i=>`${i.product}${i.nib?' / '+i.nib:''} × ${i.quantity}`).join('\n');
- return {from:env.MAIL_FROM||'WUGONG <noreply@mail.wugong-pen.com>',to:[ADMIN_EMAIL],subject:(env.APP_ENV==='staging'&&env.PAYMENTS_LIVE!=='true'?'【測試訂單】':'')+'WUGONG 新訂單 '+order.order_number,text:`新訂單已成立；此通知不代表買家已付款。\n\n訂單編號：${order.order_number}\n下單時間：${order.created_at}\n買家 Email：${order.email}\n收件國家：${order.country}\n\n${lines}\n\n訂單總額（含運費）：NT$${order.total}\n配送方式：${order.shipping||''}\n收件地點：${order.address||''}\n付款方式：${({bank:'自行匯款',ecpay:'綠界信用卡',ecpay_twqr:'歐付寶 TWQR',paypal_invoice:'PayPal 人工帳單'})[order.payment]||order.payment}\n付款狀態：${order.payment==='paypal_invoice'?'待確認商品與運費，並由管理員另寄 PayPal 帳單':'待付款，請在後台核對'}\n\n查看訂單（須登入管理員）：\n${link}\n${env.APP_ENV==='staging'&&env.PAYMENTS_LIVE!=='true'?'\n目前網站尚未開放正式收款，請勿依此測試通知收款或出貨。':''}`};
+ return {from:env.MAIL_FROM||'WUGONG <noreply@mail.wugong-pen.com>',to:[ADMIN_EMAIL],subject:(env.APP_ENV==='staging'&&env.PAYMENTS_LIVE!=='true'?'【測試訂單】':'')+'WUGONG 新訂單 '+order.order_number,text:`新訂單已成立；此通知不代表買家已付款。\n\n訂單編號：${order.order_number}\n下單時間：${order.created_at}\n買家 Email：${order.email}\n收件國家：${order.country}\n\n${lines}\n\n訂單總額（含運費）：NT$${order.total}\n配送方式：${order.shipping||''}\n收件地點：${order.address||''}\n付款方式：${({bank:'自行匯款',ecpay:'綠界信用卡',ecpay_twqr:'歐付寶 TWQR',paypal_invoice:'PayPal 人工帳單'})[order.payment]||order.payment}\n付款狀態：${order.payment==='paypal_invoice'?'待確認商品與運費，並由管理員另寄 PayPal 帳單':'待付款，請在後台核對'}\n\n想跟我們說的話：\n${order.note||'（未填寫）'}\n\n查看訂單（須登入管理員）：\n${link}\n${env.APP_ENV==='staging'&&env.PAYMENTS_LIVE!=='true'?'\n目前網站尚未開放正式收款，請勿依此測試通知收款或出貨。':''}`};
 }
 export function notificationStatement(env,order){return env.DB.prepare('INSERT INTO order_notifications(id,order_number,payload,created_at) VALUES (?,?,?,?)').bind('new-order/'+order.order_number,order.order_number,JSON.stringify(notificationPayload(env,order)),order.created_at);}
 export async function drainNotifications(env,send=fetch){
@@ -45,8 +45,8 @@ export async function drainNotifications(env,send=fetch){
 }
 export async function notificationStatus(env,number){
  await notificationSchema(env);
- const rows=await env.DB.prepare('SELECT id,order_number,state,attempts,next_attempt,last_error,created_at,sent_at FROM order_notifications WHERE (? IS NULL OR order_number=? OR id=? OR id=? OR id=? OR id=? OR id LIKE ?) ORDER BY created_at DESC LIMIT 10').bind(number||null,number||null,'buyer-confirmed/'+number,'buyer-shipped/'+number,'buyer-care/'+number,'buyer-paid/'+number,'bank-report/'+number+'/%').all();
- return {recipient:ADMIN_EMAIL,configured:notificationConfigured(env),notifications:rows.results.map(r=>({...r,order_number:r.order_number||(r.id.startsWith('newsletter')?'電子報':/^(buyer-preview|newyear-preview)\//.test(r.id)?'內容預覽':r.id.startsWith('buyer-newyear/')?r.id.split('/')[1]+' 新年問候':(r.id.startsWith('buyer-')||r.id.startsWith('bank-report/'))?r.id.split('/')[1]:null),kind:r.id.startsWith('bank-report/')?'bank_report':r.id.startsWith('buyer-paid/')?'buyer_paid':r.id.startsWith('newsletter')?'newsletter':r.id.startsWith('newyear-preview/')?'newyear_preview':r.id.startsWith('buyer-newyear/')?'buyer_newyear':r.id.startsWith('buyer-preview/')?'buyer_preview':r.id.startsWith('buyer-care/')?'buyer_care':r.id.startsWith('buyer-shipped/')?'buyer_shipped':r.id.startsWith('buyer-confirmed/')?'buyer_confirmed':'admin'}))};
+ const rows=await env.DB.prepare('SELECT id,order_number,state,attempts,next_attempt,last_error,created_at,sent_at FROM order_notifications WHERE (? IS NULL OR order_number=? OR id=? OR id=? OR id=? OR id=? OR id LIKE ? OR id LIKE ?) ORDER BY created_at DESC LIMIT 10').bind(number||null,number||null,'buyer-confirmed/'+number,'buyer-shipped/'+number,'buyer-care/'+number,'buyer-paid/'+number,'bank-report/'+number+'/%','order-message/'+number+'/%').all();
+ return {recipient:ADMIN_EMAIL,configured:notificationConfigured(env),notifications:rows.results.map(r=>({...r,order_number:r.order_number||(r.id.startsWith('order-message/')?r.id.split('/')[1]:r.id.startsWith('newsletter')?'電子報':/^(buyer-preview|newyear-preview)\//.test(r.id)?'內容預覽':r.id.startsWith('buyer-newyear/')?r.id.split('/')[1]+' 新年問候':(r.id.startsWith('buyer-')||r.id.startsWith('bank-report/'))?r.id.split('/')[1]:null),kind:r.id.startsWith('order-message/')?'order_message':r.id.startsWith('bank-report/')?'bank_report':r.id.startsWith('buyer-paid/')?'buyer_paid':r.id.startsWith('newsletter')?'newsletter':r.id.startsWith('newyear-preview/')?'newyear_preview':r.id.startsWith('buyer-newyear/')?'buyer_newyear':r.id.startsWith('buyer-preview/')?'buyer_preview':r.id.startsWith('buyer-care/')?'buyer_care':r.id.startsWith('buyer-shipped/')?'buyer_shipped':r.id.startsWith('buyer-confirmed/')?'buyer_confirmed':'admin'}))};
 }
 export async function queueTestNotification(env){
  await notificationSchema(env);const id='notification-test/'+crypto.randomUUID();
@@ -170,4 +170,42 @@ export async function annualUnsubscribe(request,env){
  }
  const stopped=!row.enabled||request.method==='POST';
  return new Response(`<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WUGONG 年度問候 / Annual greetings</title><body style="max-width:640px;margin:64px auto;padding:24px;font:18px/1.8 sans-serif"><h1>WUGONG 吾鋼</h1><h2>${stopped?'已停止年度問候 / Unsubscribed':'停止年度問候 / Unsubscribe'}</h2><p>${stopped?'您將不再收到每年新年問候。 / You will no longer receive our annual New Year greeting.':'確定不再收到每年新年問候嗎？ / Would you like to stop receiving our annual New Year greeting?'}</p><p>訂單、出貨及售後必要通知不受影響。<br>Essential order, shipping and service notifications are unaffected.</p>${stopped?'':`<form method="post"><button type="submit" style="padding:12px">確認停止年度問候 / Confirm unsubscribe</button></form>`}</body></html>`,{headers});
+}
+
+// Per-order conversation. The original checkout note is imported once, including legacy orders.
+export async function orderConversation(request,env,url,actor,admin,readBody){
+ const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
+ const number=url.searchParams.get('order');
+ if(!number||number.length>100)fail(400,'缺少訂單編號 / Missing order number');
+ const order=await env.DB.prepare(admin?'SELECT * FROM orders WHERE order_number=?':'SELECT o.* FROM orders o JOIN member_orders mo ON mo.order_number=o.order_number WHERE o.order_number=? AND mo.member_id=?').bind(...(admin?[number]:[number,actor.id])).first();
+ if(!order)fail(404,'找不到此訂單 / Order not found');
+ if(!['GET','POST','DELETE'].includes(request.method)||request.method==='DELETE'&&!admin)fail(403,'您沒有此操作權限 / Not permitted');
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS order_messages(seq INTEGER PRIMARY KEY AUTOINCREMENT,message_key TEXT NOT NULL UNIQUE,order_number TEXT NOT NULL,role TEXT NOT NULL,actor_id TEXT,body TEXT NOT NULL,created_at TEXT NOT NULL,deleted_at TEXT,deleted_by TEXT)").run();
+ await env.DB.prepare('CREATE INDEX IF NOT EXISTS order_messages_order ON order_messages(order_number,seq)').run();
+ await notificationSchema(env);
+ const original=(order.note||'').split('\n配送運費：')[0].trim();
+ if(original)await env.DB.prepare("INSERT OR IGNORE INTO order_messages(message_key,order_number,role,body,created_at) VALUES (?,?,'buyer',?,?)").bind('initial/'+number,number,original,order.created_at).run();
+ if(request.method==='GET'){
+  const before=Number(url.searchParams.get('before')||Number.MAX_SAFE_INTEGER);if(!Number.isSafeInteger(before)||before<1)fail(400,'頁碼無效');
+  const rows=(await env.DB.prepare('SELECT seq,role,body,created_at,deleted_at FROM order_messages WHERE order_number=? AND seq<? ORDER BY seq DESC LIMIT 51').bind(number,before).all()).results;
+  const hasMore=rows.length>50;return {messages:rows.slice(0,50).reverse(),hasMore};
+ }
+ const data=await readBody(request),stamp=new Date().toISOString();
+ if(request.method==='DELETE'){
+  if(!Number.isSafeInteger(data.id))fail(400,'訊息編號無效');
+  const row=await env.DB.prepare('SELECT * FROM order_messages WHERE seq=? AND order_number=?').bind(data.id,number).first();if(!row)fail(404,'找不到訊息');
+  if(row.deleted_at)return {success:true};
+  const statements=[env.DB.prepare("UPDATE order_messages SET body='',deleted_at=?,deleted_by=? WHERE seq=? AND order_number=? AND deleted_at IS NULL").bind(stamp,actor.id,data.id,number),env.DB.prepare("UPDATE order_notifications SET state='cancelled',payload='{}',last_error='訊息已刪除',lease_until=0 WHERE id=? AND state IN ('queued','attention') AND lease_until<=?").bind('order-message/'+number+'/'+row.message_key,Date.now()),env.DB.prepare("INSERT INTO admin_audit(id,member_id,action,order_number,previous_status,next_status,created_at) VALUES (?,?,'order.message.delete',?,?,?,?)").bind(crypto.randomUUID(),actor.id,number,String(data.id),'deleted',stamp)];
+  if(row.message_key==='initial/'+number){const at=(order.note||'').indexOf('\n配送運費：');statements.push(env.DB.prepare('UPDATE orders SET note=? WHERE order_number=?').bind(at<0?'':order.note.slice(at),number));}
+  await env.DB.batch(statements);return {success:true};
+ }
+ if(typeof data.text!=='string'||!data.text.trim()||data.text.trim().length>1000)fail(400,'請填寫 1～1,000 字的訊息 / Enter 1–1,000 characters');
+ if(typeof data.key!=='string'||! /^[a-f0-9-]{36}$/.test(data.key))fail(400,'請重新整理後再試 / Please refresh');
+ const role=admin?'admin':'buyer',key=role+'/'+actor.id+'/'+data.key;
+ const existing=await env.DB.prepare('SELECT order_number,body,deleted_at FROM order_messages WHERE message_key=?').bind(key).first();
+ if(existing){if(existing.order_number!==number||existing.body!==data.text.trim()&&!existing.deleted_at)fail(409,'請重新整理後再試');return {success:true,queued:true};}
+ const payload={from:env.MAIL_FROM||'WUGONG <noreply@mail.wugong-pen.com>',to:[admin?order.email:ADMIN_EMAIL],reply_to:ADMIN_EMAIL,subject:'WUGONG 訂單新訊息 / New order message '+number,text:`${admin?'WUGONG 已回覆您的訂單訊息。\nWUGONG has replied to your order.':'買家新增了訂單訊息。'}\n\n訂單編號 / Order number: ${number}\n\n${data.text.trim()}\n\n請登入網站查看並回覆 / Sign in to view and reply:\n${env.MAIL_ORIGIN||FALLBACK_ORIGIN}${admin?'/member.html':'/admin-order-detail.html?order='+encodeURIComponent(number)}\n\n${ADMIN_EMAIL}`};
+ const statements=[env.DB.prepare('INSERT OR IGNORE INTO order_messages(message_key,order_number,role,actor_id,body,created_at) VALUES (?,?,?,?,?,?)').bind(key,number,role,actor.id,data.text.trim(),stamp),env.DB.prepare('INSERT OR IGNORE INTO order_notifications(id,payload,created_at) VALUES (?,?,?)').bind('order-message/'+number+'/'+key,JSON.stringify(payload),stamp)];
+ if(admin)statements.push(env.DB.prepare("INSERT OR IGNORE INTO admin_audit(id,member_id,action,order_number,next_status,created_at) VALUES (?,?,'order.message.reply',?,'sent',?)").bind(key,actor.id,number,stamp));
+ await env.DB.batch(statements);return {success:true,queued:true};
 }

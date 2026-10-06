@@ -1,0 +1,16 @@
+export function conversationPanel({api,order,admin=false}){
+ const make=(tag,text)=>{const e=document.createElement(tag);e.textContent=text||'';return e;};
+ if(!document.querySelector('link[href="/order-conversation.css"]')){const css=make('link');css.rel='stylesheet';css.href='/order-conversation.css';document.head.append(css);}
+ const panel=make('details');panel.className='order-conversation';panel.append(make('summary','想跟我們說的話 / Order conversation'));
+ const status=make('p'),list=make('div'),older=make('button','載入較早訊息 / Earlier messages'),refresh=make('button','重新整理對話 / Refresh'),form=make('form'),label=make('label','新增訊息 / New message'),input=make('textarea'),send=make('button','送出訊息 / Send');
+ status.setAttribute('role','status');input.required=true;input.maxLength=1000;input.rows=4;label.append(input);send.type='submit';older.type=refresh.type='button';older.hidden=true;
+ form.append(label,make('p',admin?'回覆將以 Email 通知買家。 / Replies notify the buyer by email.':'訊息送出後會通知 WUGONG，買家無法刪除訊息。 / WUGONG will be notified. Sent messages cannot be deleted by buyers.'),send);panel.append(status,older,list,refresh,form);
+ const endpoint='/api/'+(admin?'admin':'member')+'/order-messages?order='+encodeURIComponent(order);
+ let loaded=false,before=null,key=crypto.randomUUID(),busy=false;
+ function row(m){const box=make('article');box.className='conversation-message '+m.role;box.append(make('strong',m.role==='admin'?'WUGONG':'買家 / Buyer'),make('time',new Date(m.created_at).toLocaleString()));const body=make('p',m.deleted_at?'此訊息已由管理員刪除 / Deleted by administrator':m.body);body.setAttribute('translate','no');box.append(body);
+ if(admin&&!m.deleted_at){const del=make('button','刪除 / Delete');del.type='button';box.append(del);del.onclick=()=>{del.hidden=true;const warning=make('p','確定刪除此訊息？已寄出的 Email 無法撤回。'),yes=make('button','確認刪除'),no=make('button','取消');yes.type=no.type='button';box.append(warning,yes,no);no.onclick=()=>{warning.remove();yes.remove();no.remove();del.hidden=false;};yes.onclick=async()=>{yes.disabled=true;try{await api(endpoint,'DELETE',{id:m.seq});await load();}catch(e){status.textContent=e.message;yes.disabled=false;}};};}return box;}
+ async function load(more=false){older.disabled=refresh.disabled=true;try{const d=await api(endpoint+(more&&before?'&before='+before:''));const nodes=d.messages.map(row);if(more)list.prepend(...nodes);else list.replaceChildren(...nodes);before=d.messages[0]?.seq||before;older.hidden=!d.hasMore;loaded=true;status.textContent=list.children.length?'':'目前沒有訊息 / No messages yet';}catch(e){status.textContent=e.message;}finally{older.disabled=refresh.disabled=false;}}
+ panel.addEventListener('toggle',()=>{if(panel.open&&!loaded)void load();});older.onclick=()=>load(true);refresh.onclick=()=>load();
+ form.onsubmit=async e=>{e.preventDefault();if(busy||!input.value.trim())return;busy=true;send.disabled=true;input.readOnly=true;try{await api(endpoint,'POST',{text:input.value,key});input.value='';key=crypto.randomUUID();await load();status.textContent='訊息已儲存，Email 通知已排入寄送。 / Message saved; email notification queued.';}catch(error){status.textContent=error.message;}finally{busy=false;send.disabled=false;input.readOnly=false;}};
+ return panel;
+}

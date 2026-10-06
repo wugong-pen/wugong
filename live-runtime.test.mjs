@@ -98,5 +98,17 @@ test('live bank checkout, buyer report, administrator settlement and shipment no
  for(const prefix of ['new-order/','buyer-confirmed/','bank-report/','buyer-paid/','buyer-shipped/','buyer-care/'])assert.equal(rows.filter(n=>n.id.startsWith(prefix)).length,1,prefix);
  assert.match(JSON.parse(rows.find(n=>n.id.startsWith('buyer-shipped/')).payload).text,/Factory date/);
  assert.equal((await db.prepare('SELECT status FROM orders WHERE order_number=?').bind(orderNumber).first()).status,'shipped');
+
+ const chatPath='/api/member/order-messages?order='+orderNumber,adminChat='/api/admin/order-messages?order='+orderNumber;
+ assert.equal((await mf.dispatchFetch('https://shop.test'+chatPath)).status,401);
+ assert.equal((await post(chatPath,{text:'bad',key:crypto.randomUUID()},{...headers,Origin:'https://evil.test'})).status,403);
+ const msg={text:'請確認包裝',key:crypto.randomUUID()};
+ const sends=await Promise.all([post(chatPath,msg),post(chatPath,msg)]);for(const r of sends)assert.equal(r.status,200,await r.clone().text());
+ const chat=await (await mf.dispatchFetch('https://shop.test'+chatPath,{headers})).json();assert.equal(chat.messages.filter(m=>m.body===msg.text).length,1);
+ const msgId=chat.messages.find(m=>m.body===msg.text).seq;
+ assert.equal((await mf.dispatchFetch('https://shop.test'+chatPath,{method:'DELETE',headers,body:JSON.stringify({id:msgId})})).status,403);
+ assert.equal((await post(adminChat,{text:'已確認',key:crypto.randomUUID()},adminHeaders)).status,200);
+ assert.equal((await mf.dispatchFetch('https://shop.test'+adminChat,{method:'DELETE',headers:adminHeaders,body:JSON.stringify({id:msgId})})).status,200);
+ assert.equal((await db.prepare('SELECT body FROM order_messages WHERE seq=?').bind(msgId).first()).body,'');
  }finally{await mf.dispose();}
 });

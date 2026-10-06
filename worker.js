@@ -2,7 +2,7 @@ import {manageLogistics,logisticsNotify} from './logistics.js';
 import {liveEnabled,liveSchema,reportBank,confirmBank} from './live-payments.js';
 import {newsletterSchema,newsletterPreferenceStatement,memberNewsletter,manageNewsletters,prepareNewsletterDeliveries,newsletterUnsubscribe} from './newsletter-store.js';
 import {listGuides,manageGuides} from './nib-guide-store.js';
-import {annualUnsubscribe,queueNewYearGreetings,queueNewYearPreview,memberEmailPayload,queueBuyerEmailPreviews,factoryDateForOrder,buyerNotificationStatement,shipmentNotification,notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
+import {orderConversation,annualUnsubscribe,queueNewYearGreetings,queueNewYearPreview,memberEmailPayload,queueBuyerEmailPreviews,factoryDateForOrder,buyerNotificationStatement,shipmentNotification,notificationSchema,notificationStatement,drainNotifications,notificationStatus,queueTestNotification} from './order-notifications.js';
 import {readInvoice,manageInvoice} from './manual-invoice.js';
 import {shippingRegions,shippingQuote,shippingStatements,startStoreMap,storeMapReturn,selectedStore,storeStatements} from './shipping.js';
 import {firstGiftQuote,firstGiftStatements,firstSchema,giftPhone,giftNotice} from './first-purchase.js';
@@ -113,6 +113,7 @@ async function adminApi(request,env,url,ctx) {
     return json({success:true},200,{'Set-Cookie':adminCookie('',0)});
   }
   const m=await adminSession(request,env);
+  if(path==='/api/admin/order-messages'){if(method!=='GET')await rate(env,'admin-message:'+m.id,60);const result=await orderConversation(request,env,url,m,true,body);if(result.queued){const task=drainNotifications(env).catch(()=>console.error('Conversation email deferred'));if(ctx?.waitUntil)ctx.waitUntil(task);else await task;}return json(result);}
   if(path==='/api/admin/logistics'){if(method!=='GET')await rate(env,`admin-logistics:${m.id}`,40);return json({success:true,...await manageLogistics(request,env,url,m,body)});}
   if(path==='/api/admin/newsletters'){if(method!=='GET')await rate(env,`admin-newsletter:${m.id}`,30);const result=await manageNewsletters(request,env,url,m,body);if(result.queued){const delivery=prepareNewsletterDeliveries(env).then(()=>drainNotifications(env)).catch(()=>console.error('Newsletter delivery deferred'));if(ctx?.waitUntil)ctx.waitUntil(delivery);else await delivery;}return json({success:true,...result});}
   if(path==='/api/admin/nib-guides'){if(method!=='GET')await rate(env,`admin-guide:${m.id}`,120);return json({success:true,...await manageGuides(request,env,url,m,body)});}
@@ -235,6 +236,7 @@ async function api(request,env,url,ctx) {
   if(path==='/api/cvs/start'&&method==='POST'){const m=await session(request,env);await rate(env,`cvs:${m.id}`,30);return json({success:true,...await startStoreMap(env,m,await body(request),url.origin)});}
   if(path==='/api/cvs/selection'&&method==='GET'){const m=await session(request,env);return json({success:true,store:await selectedStore(env,m,url.searchParams.get('token'))});}
   if(path==='/api/member'&&method==='GET') {const m=await session(request,env,false);return json({success:true,member:m?publicMember(m):null,emailAvailable:mailAvailable(env,url)});}
+  if(path==='/api/member/order-messages'){const m=await session(request,env);if(method!=='GET')await rate(env,'buyer-message:'+m.id,30);const result=await orderConversation(request,env,url,m,false,body);if(result.queued){const task=drainNotifications(env).catch(()=>console.error('Conversation email deferred'));if(ctx?.waitUntil)ctx.waitUntil(task);else await task;}return json(result);}
   if(path==='/api/member/newsletter'){const m=await session(request,env);return json({success:true,...await memberNewsletter(request,env,m,method==='POST'?await body(request):null)});}
   if(path==='/api/member/verify-email'&&method==='POST')return consumeEmailToken(request,env,'verify');
   if(path==='/api/member/reset-password'&&method==='POST')return consumeEmailToken(request,env,'reset');
@@ -355,7 +357,7 @@ async function api(request,env,url,ctx) {
     try{await env.DB.batch([
       ...catalogGuards(env,items),
       env.DB.prepare('INSERT INTO orders(order_number,customer_name,phone,email,address,shipping,payment,note,items,total,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(number,name,phone,m.email,address,shipping,payment,note+'\n配送運費：NT$'+q.shippingFee+(q.gift?'\n優惠券贈品：'+q.gift:'')+(firstGift?'\n首購贈品'+(firstGift.code?'（'+firstGift.code+'）':'')+'：'+firstGift.description+'\n'+giftNotice:''),JSON.stringify(items),total,'pending',createdAt),
-      notificationStatement(env,{order_number:number,created_at:createdAt,email:m.email,country:c.country,items,total,payment,shipping,address}),
+      notificationStatement(env,{order_number:number,created_at:createdAt,email:m.email,country:c.country,items,total,payment,shipping,address,note}),
       buyerNotificationStatement(env,{order_number:number,created_at:createdAt,email:m.email,items,total,payment,bank,dueAt,shipping,address},'confirmed'),
       env.DB.prepare('INSERT INTO member_orders(order_number,member_id,shipping_country,request_key) VALUES (?,?,?,?)').bind(number,m.id,c.country,key),
       ...storeStatements(env,store,m,number),...shippingStatements(env,q,number),...reserveStatements(env,number,items,payment),
