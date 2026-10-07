@@ -1,5 +1,11 @@
 // Reviewed storefront copy. Exact matches only; never modify submitted values.
 export const translations = {
+  "商店：吾鋼企業社｜負責人：陳冠維｜統一編號：70740372": "Operator: 吾鋼企業社 | Representative: 陳冠維 | Business registration number: 70740372",
+  "營業地址：高雄市鳳山區南正二路64巷11號": "Business address: No. 11, Lane 64, Nanzheng 2nd Road, Fengshan District, Kaohsiung City, Taiwan",
+  "客服採 Email／LINE，服務時段 星期一至星期五 08:30–17:30（台灣時間）。": "Customer service: Email / LINE, Monday–Friday 08:30–17:30 Taiwan time (UTC+8).",
+  "隱私權與商店資訊 / Privacy &amp; store information": "Privacy & store information",
+  "隱私權與商店資訊 / Privacy & store information": "Privacy & store information",
+  "會員國家／地區與實際收件國家分開填寫。可寄送地區與運費請參閱購物須知。": "Your member country and delivery destination are entered separately. See the Shopping Guide for available destinations and shipping fees.",
   "海外訂單採人工確認：下單時留下會員 Email 及完整收件資料，我們確認商品與運費後，另行寄送 PayPal 帳單。收到帳單不代表已付款；確認收款後才安排出貨。付款期限以帳單為準。": "Overseas orders are reviewed manually. We confirm your items and shipping, then email a separate PayPal invoice. We arrange dispatch after payment is confirmed. The payment deadline is stated on the invoice.",
   "自行匯款（3 天內）": "Bank transfer (within 3 days)",
   "綠界信用卡": "Credit card via ECPay",
