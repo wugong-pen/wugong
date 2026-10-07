@@ -56,7 +56,7 @@ async function saveResult(env,row,d,query=false){
 async function sendForm(env,path,fields,send){const c=credentials(env),signed={...fields,CheckMacValue:logisticsMac(fields,c.key,c.iv)};const r=await send(root+path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(signed).toString(),signal:AbortSignal.timeout(15000)});if(!r.ok)fail(502,'綠界連線結果未確認');return r.text();}
 export async function createLogistics(env,admin,number,send=fetch){
  await logisticsSchema(env);const order=await getOrder(env,number);await requireLiveOrder(env,order);
- if(order.status!=='paid'||order.shipping_country!=='TW'||!['bank','ecpay'].includes(order.payment))fail(409,'僅限已確認收款、尚未出貨的台灣信用卡／匯款訂單');
+ if(order.status!=='paid'||order.shipping_country!=='TW'||!['bank','ecpay','ecpay_twqr'].includes(order.payment))fail(409,'僅限已確認收款、尚未出貨的台灣信用卡／歐付寶 TWQR／匯款訂單');
  const receipt=await env.DB.prepare('SELECT amount,currency FROM payment_receipts WHERE order_number=?').bind(number).first();if(!receipt||receipt.amount!==order.total||receipt.currency!=='TWD')fail(409,'缺少已核對的收款紀錄');
  let row=await env.DB.prepare('SELECT * FROM logistics_orders WHERE order_number=?').bind(number).first();
  if(row){if(row.state==='created')return publicRow(row);fail(409,'此單已送出建立要求，請按「查詢／同步物流」核對結果，勿重複建立');}

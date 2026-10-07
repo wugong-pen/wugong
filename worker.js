@@ -335,7 +335,7 @@ async function api(request,env,url,ctx) {
     const manualBrand=manual?(manual.brand==='UNIMARTC2C'?'7-ELEVEN':'全家'):null;
     const name=text(manual?manual.name:c.name,100,'收件人姓名'),phone=text(manual?manual.phone:c.phone,40,'電話');
     const store=order.shipping==='cvs'?await selectedStore(env,m,order.storeToken):null;
-    if((store||manual)&&(c.country!=='TW'||!['bank','ecpay'].includes(order.payment)))fail(400,'超商取貨限台灣信用卡或自行匯款');
+    if((store||manual)&&(c.country!=='TW'||!['bank','ecpay','ecpay_twqr'].includes(order.payment)))fail(400,'超商取貨限台灣信用卡、歐付寶 TWQR 或自行匯款');
     if((store||manual)&&!/^09[0-9]{8}$/.test(phone))fail(400,'超商取貨請填寫 09 開頭的十碼手機號碼');
     const address=store?`${store.brand} ${store.name}（門市代碼 ${store.storeId}） ${store.address}`:manual?manualBrand+' '+text(manual.storeName,100,'門市名稱')+'（人工確認門市）':text(c.address,500,'收件地址');
     if(!COUNTRY_CODES.includes(c.country))fail(400,'請選擇收件國家／地區');

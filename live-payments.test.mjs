@@ -53,3 +53,12 @@ test('live ECPay query settles stock and receipt email once; old orders cannot s
  }finally{sql.close();}
 });
 
+test('approved TWQR uses live endpoint, enforces amount and settles stock/email once',async()=>{
+ const {sql,env,order}=setup();try{const o=await order('WGTWQR000001','ecpay_twqr');o.total=1000;sql.prepare('UPDATE orders SET total=?').run(o.total);
+ await assert.rejects(paymentForm(o,env),/尚未開通/);env.ECPAY_TWQR_ENABLED='true';
+ for(const total of [5,50000])await assert.rejects(paymentForm({...o,total},env),/49,999/);
+ const form=await paymentForm(o,env);assert.equal(form.action,'https://payment.ecpay.com.tw/Cashier/AioCheckOut/V5');assert.equal(form.fields.ChoosePayment,'TWQR');
+ const data={MerchantID:env.ECPAY_MERCHANT_ID,MerchantTradeNo:o.order_number,TradeAmt:'1000',TradeNo:'99887766',PaymentType:'TWQR_OPAY',TradeStatus:'1'};data.CheckMacValue=checkMac(data,env.ECPAY_HASH_KEY,env.ECPAY_HASH_IV);
+ const send=async()=>new Response(new URLSearchParams(data));assert.equal(await queryEcpay(env,o,send),true);assert.equal(await queryEcpay(env,o,send),true);assert.equal(sql.prepare('SELECT status FROM orders').get().status,'paid');assert.equal(sql.prepare('SELECT count(*) n FROM order_notifications').get().n,1);assert.equal(sql.prepare("SELECT sold FROM inventory WHERE sku='product-fuji'").get().sold,1);
+ }finally{sql.close();}
+});

@@ -25,7 +25,7 @@ export function syncStore(){
 }
 export async function restoreStore(memberId){
  let draft;try{draft=JSON.parse(sessionStorage.getItem('wugongStoreDraft'));}catch{}
- if(draft?.memberId===memberId&&Date.now()-draft.savedAt<3600000){for(const key of fields)if($(key)&&typeof draft[key]==='string')$(key).value=draft[key];if(draft.payment)document.querySelector(`input[name=payment][value="${draft.payment==='bank'?'bank':'ecpay'}"]`).checked=true;}
+ if(draft?.memberId===memberId&&Date.now()-draft.savedAt<3600000){for(const key of fields)if($(key)&&typeof draft[key]==='string')$(key).value=draft[key];if(draft.payment)document.querySelector(`input[name=payment][value="${['bank','ecpay','ecpay_twqr'].includes(draft.payment)?draft.payment:'bank'}"]`).checked=true;}
  sessionStorage.removeItem('wugongStoreDraft');
  const token=new URLSearchParams(location.search).get('store');
  if(token){history.replaceState(null,'','/checkout');const r=await fetch('/api/cvs/selection?token='+encodeURIComponent(token)),d=await r.json();if(!r.ok)throw Error(d.error);selected=d.store;$('shipping').value='cvs';$('storeBrand').value=selected.subtype;}
