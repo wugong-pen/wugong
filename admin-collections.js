@@ -9,7 +9,7 @@ export function renderCollectionsEditor({parent,draft,node,field,button,changed,
    const search=field(group,'搜尋要展示的商品','','text',()=>{}, {maxLength:100}),results=node('div');let page=1;
    const load=()=>run(async()=>{const d=await api('/api/admin/products?'+new URLSearchParams({q:search.value,page}));results.replaceChildren();for(const p of d.products.filter(p=>p.active&&p.category===category))results.append(button('新增：'+p.name+'／'+p.variant,()=>{
     if((draft.collections?.length||0)>=30){message('作品最多 30 筆');return;}
-    draft.collections??=[];draft.collections.push({category,title:p.name,titleEn:p.english?.name||'',description:p.description||'',descriptionEn:p.english?.description||'',badge:'最新商品',badgeEn:'New arrival',sku:p.sku,image:p.images?.[0]||'',enabled:true});draw();changed();
+    draft.collections??=[];draft.collections.push({category,title:p.name,titleEn:p.english?.name||'',description:p.description||'',descriptionEn:p.english?.description||'',badge:'最新商品',badgeEn:'New arrival',sku:p.sku,image:p.images?.[0]?'/'+p.images[0].replace(/^\//,''):'',enabled:true});draw();changed();
    }));if(!results.children.length)results.append(node('p','本頁沒有符合此分類的上架商品，可調整搜尋或翻頁。'));if(page>1)results.append(button('上一頁',()=>{page--;load();}));if(d.hasMore)results.append(button('下一頁',()=>{page++;load();}));});
    group.append(button('搜尋／選擇商品以新增圖文',()=>{page=1;load();}),results);
    for(const [index,item] of (draft.collections||[]).entries())if(item.category===category){
