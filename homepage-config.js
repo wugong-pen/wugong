@@ -1,3 +1,4 @@
+import {validateCollections} from './homepage-collections.js';
 import {validateSocial} from './homepage-social.js';
 import {youtubeId} from './content-model.js';
 export const textFields = [
@@ -35,7 +36,7 @@ export function validateHomepage(value){
   photos+=block.photos.length;if(photos>36)bad('首頁幻燈片照片合計最多 36 張');
   return {type:'slideshow',title:block.title,autoplay:block.autoplay,interval:block.interval,photos:block.photos.map(p=>{if(!p||!p.src||typeof p.caption!=='string'||p.caption.length>200)bad('請填寫有效照片及 200 字以內的說明');return {src:image(p.src),caption:p.caption};})};
  });
- return {logo:image(value.logo===undefined?'/964161_0.jpg':value.logo),image:image(value.image),imagePosition:value.imagePosition,overlay:value.overlay,background:color(value.background),backgroundImage:image(value.backgroundImage),sectionBackground:color(value.sectionBackground),media,texts,social:validateSocial(value.social)};
+ return {...(value.collections===undefined?{}:{collections:validateCollections(value.collections)}),logo:image(value.logo===undefined?'/964161_0.jpg':value.logo),image:image(value.image),imagePosition:value.imagePosition,overlay:value.overlay,background:color(value.background),backgroundImage:image(value.backgroundImage),sectionBackground:color(value.sectionBackground),media,texts,social:validateSocial(value.social)};
 }
 export function applyHomepage(config,root=document){
  const c=validateHomepage(config),body=root.querySelector('body'),hero=root.querySelector('#home');

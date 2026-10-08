@@ -59,3 +59,5 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid #d7
   .home-page .cart-drawer{padding:20px 16px}
 }
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important}}
+
+.collection-group{padding:24px 0;text-align:left}.collection-group>h3{font-size:26px;margin-bottom:20px}.collection-showcase{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:24px;margin-bottom:20px}.collection-showcase .card{min-width:0;display:flex;flex-direction:column;gap:16px}.collection-showcase img{width:100%;aspect-ratio:4/3;object-fit:contain;background:#111}.collection-showcase h4{font-size:24px}.collection-showcase p{white-space:pre-wrap;overflow-wrap:anywhere}.collection-showcase .btn{margin-top:auto;align-self:flex-start}
