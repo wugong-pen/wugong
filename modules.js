@@ -1,3 +1,4 @@
+import {bundleRecipes} from './product-bundles.js';
 import {manageShipping} from './shipping.js';
 import {manageFirstGift,firstSchema} from './first-purchase.js';
 import {youtubeId} from './content-model.js';
@@ -56,6 +57,7 @@ export async function manageModules(request,env,url,m,body){
  if(path==='/api/admin/family'&&method==='POST'){
   const d=await body(request),family=text(d.family,100),old=await env.DB.prepare('SELECT f.*,i.available FROM product_families f JOIN inventory i ON i.sku=f.stock_sku WHERE family=?').bind(family).first();if(!old||old.version!==d.version)fail(409,'筆款資料已更新，請重新載入');
   const threshold=num(d.threshold,0,100000),video=youtube(d.video),delta=num(d.delta||0,-100000,100000),reason=text(d.reason||'',500);
+  if(bundleRecipes[family]&&delta)fail(400,'組合共用單品庫存，請調整對應單本或單杯庫存');
   if((delta||!old.confirmed)&&!reason)fail(400,'請填寫庫存核對或異動原因');if(!old.confirmed&&d.confirm!==true)fail(400,'請先核對實際可售筆身數量');
   if(old.available!==d.expected||old.available+delta<0)fail(409,'庫存已變更或不足，請重新載入');
   await env.DB.batch([env.DB.prepare('UPDATE product_families SET threshold=?,video=?,confirmed=1,version=version+1 WHERE family=? AND version=?').bind(threshold,video,family,d.version),check(env),env.DB.prepare('UPDATE inventory SET available=available+? WHERE sku=? AND available=? AND available+?>=0').bind(delta,old.stock_sku,d.expected,delta),check(env),audit(env,m,'family.stock',family,{available:old.available},{available:old.available+delta,threshold,video,reason})]);return{};

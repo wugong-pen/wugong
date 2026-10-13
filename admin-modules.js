@@ -1,3 +1,4 @@
+import {bundleRecipes} from './product-bundles.js';
 import {youtubeId} from './content-model.js';
 export async function init({api,node,message}){
  const section=new URLSearchParams(location.search).get('section'),view=document.getElementById('manage-view'),editor=document.getElementById('editor');
@@ -9,7 +10,7 @@ export async function init({api,node,message}){
  function form(title){editor.replaceChildren();const f=node('form');f.className='manage-form';f.append(node('h2',title));editor.append(f);f.scrollIntoView({behavior:'smooth'});return f;}
  function submit(f,fn){const b=node('button','儲存設定');b.type='submit';f.append(b);f.onsubmit=async e=>{e.preventDefault();b.disabled=true;try{await fn();editor.replaceChildren();await load();message('設定已儲存。');}catch(e){message(e.message);}finally{b.disabled=false;}};}
  function card(title,detail,fn){const c=node('section');c.className='manage-form';c.append(node('h2',title),node('p',detail),button('管理',fn));view.append(c);}
- async function stock(p){const f=form(p.name+'｜共用筆身');f.append(node('p',p.confirmed?`可售 ${p.available} 件，已售 ${p.sold} 件。各尖型共用此數量。`:`待核對：舊規格庫存合計 ${p.legacy_available}，僅供查閱，不能視為筆身數量。請填入實際可售筆身數量，排除未完成訂單已保留的筆身。`));
+ async function stock(p){if(bundleRecipes[p.family]){const f=form(p.name+'｜組合庫存');f.append(node('p','此組合依各單品庫存自動計算，請至對應單本或單杯調整實際庫存。組合不另行入庫。'));return;}const f=form(p.name+'｜共用筆身');f.append(node('p',p.confirmed?`可售 ${p.available} 件，已售 ${p.sold} 件。各尖型共用此數量。`:`待核對：舊規格庫存合計 ${p.legacy_available}，僅供查閱，不能視為筆身數量。請填入實際可售筆身數量，排除未完成訂單已保留的筆身。`));
   const delta=field(f,p.confirmed?'增減數量（入庫正數、盤損負數）':'實際可售筆身數量',0,'number');delta.min=p.confirmed?-100000:0;delta.max=100000;
   const reason=field(f,'庫存核對／異動原因','','textarea'),threshold=field(f,'低庫存提醒門檻',p.threshold,'number');threshold.min=0;threshold.max=100000;
   const video=field(f,'YouTube 網址或嵌入碼',p.video?'https://youtu.be/'+p.video:'','textarea');video.maxLength=4000;
@@ -57,7 +58,7 @@ export async function init({api,node,message}){
   f.append(node('p','首購會員購買鋼筆時，依實際收件國家自動套用，無需輸入折扣碼。每位會員、每支收件電話國內海外合計限一次。未完成訂單先保留資格，管理員完成訂單後才記為已領取；取消或逾期後恢復資格。'),node('p','每個地區使用一組目前的首購贈品設定；可更改名稱、商品、數量或暫停。只影響後續新訂單，既有訂單的贈品保留。贈品由管理員依訂單備貨，不扣除商品庫存。'),node('p','一般折扣碼每張訂單限一張；首購贈品另行自動套用，可與一般優惠券一起使用。'));
   submit(f,()=>api('/api/admin/first-purchase','POST',{region:p.region,title:title.value,description:description.value,kind:kind.value,active:Number(active.value),version:p.version}));
  }
- async function load(){view.replaceChildren();message('');if(section==='stock'){const {families}=await api('/api/admin/families');view.append(node('p','每個筆款只有一筆共用庫存；舊庫存須核對後才開放購買。'));for(const p of families)card(p.name,(!p.confirmed?'⚠ 待核對庫存':p.available<=p.threshold?'⚠ 低庫存':'庫存正常')+'｜可售 '+p.available+'｜提醒門檻 '+p.threshold,()=>stock(p));}
+ async function load(){view.replaceChildren();message('');if(section==='stock'){const {families}=await api('/api/admin/families');view.append(node('p','每個筆款只有一筆共用庫存；舊庫存須核對後才開放購買。'));for(const p of families)card(p.name,bundleRecipes[p.family]?'組合商品｜共用單品庫存':(!p.confirmed?'⚠ 待核對庫存':p.available<=p.threshold?'⚠ 低庫存':'庫存正常')+'｜可售 '+p.available+'｜提醒門檻 '+p.threshold,()=>stock(p));}
   if(section==='categories'){view.append(button('＋ 新增品牌／分類',()=>category()));const {categories}=await api('/api/admin/categories');for(const b of categories.filter(c=>!c.parent)){card(b.name,'品牌',()=>category(b));for(const c of categories.filter(c=>c.parent===b.id)){card(b.name+'／'+c.name,({pen:'鋼筆',ink:'墨水',craft:'其他商品'})[c.kind],()=>category(c));const a=node('a','查看前台分類頁');a.href='/shop.html?category='+encodeURIComponent(c.id);a.target='_blank';a.rel='noopener';view.append(a);}}}
   if(section==='nibs'){view.append(button('＋ 新增尖型',()=>nib()));for(const p of (await api('/api/admin/nibs')).nibs)card(p.name,p.active?'啟用':'停用',()=>nib(p));}
   if(section==='coupons'){view.append(button('＋ 新增優惠券',()=>coupon()),button('＋ 新增首購專用券',()=>firstCode()),button('自動首購贈品設定',()=>firstPurchase()),node('p','一般優惠券：會員在結帳頁輸入折扣碼，按「套用／清除優惠券」。首購贈品：首次購買鋼筆時依收件國家自動套用。'));for(const p of (await api('/api/admin/first-coupons')).coupons)card('首購專用券：'+p.code,p.title+'｜'+(p.active?'啟用':'停用')+'｜已領取 '+p.received+'／保留中 '+p.reserved+'｜'+p.description,()=>firstCode(p));for(const p of (await api('/api/admin/first-purchase')).settings)card(p.title,(p.region==='TW'?'台灣':'海外')+'｜'+(p.active?'自動贈送：':'暫停：')+p.description,()=>firstPurchase(p));for(const p of (await api('/api/admin/coupons')).coupons)card(p.code,(p.active?'啟用':'停用')+'｜已使用或保留 '+p.used+'/'+p.quota,()=>coupon(p));}

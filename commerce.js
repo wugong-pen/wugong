@@ -2,6 +2,7 @@ import {productTranslations} from './product-translations.js';
 import {firstGiftForOrder} from './first-purchase.js';
 import {COUNTRY_CODES} from './countries.js';
 import {manageModules} from './modules.js';
+import {bundleParts,bundleAvailability} from './product-bundles.js';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 const stamp=()=>new Date().toISOString();
 const str=(v,max=200)=>{if(typeof v!=='string'||v.length>max)fail(400,'文字欄位格式或長度不正確');return v.trim();};
@@ -40,11 +41,16 @@ export async function catalogQuote(env,items){
   if(p.category==='pen'&&!await env.DB.prepare('SELECT name FROM nib_types WHERE name=? AND active=1').bind(p.variant).first())fail(409,'此尖型已停用');
   const classification=await env.DB.prepare('SELECT c.id,c.parent FROM product_categories pc JOIN categories c ON c.id=pc.category_id WHERE pc.sku=?').bind(sku).first();
   const quantity=integer(item.quantity,1,99),count=(counts.get(sku)||0)+quantity;integer(count,1,99);counts.set(sku,count);
-  result.push({id:sku,product:p.name,nib:p.variant,price:p.price,quantity,category:p.category,categoryIds:classification?[classification.id,classification.parent]:[],catalogVersion:p.version,family:p.family,stockId:stock.stock_sku});
+  const parts=await bundleParts(env,sku);
+  if(parts?.some(part=>!part.ready))fail(409,'組合內商品暫時無法訂購，請重新選擇');
+  result.push({id:sku,product:p.name,nib:p.variant,price:p.price,quantity,category:p.category,categoryIds:classification?[classification.id,classification.parent]:[],catalogVersion:p.version,family:p.family,stockId:stock.stock_sku,...(parts?{stockComponents:parts.map(part=>({id:part.sku,stockId:part.stock_sku,units:part.units,version:part.version,family:part.family}))}:{})});
  }
  return {items:result,total:result.reduce((s,i)=>s+i.price*i.quantity,0),shippingFee:0,currency:'TWD'};
 }
-export function catalogGuards(env,items){return items.map(i=>env.DB.prepare("INSERT INTO catalog_checks(ok) SELECT CASE WHEN EXISTS(SELECT 1 FROM products WHERE sku=? AND version=? AND active=1 AND price=? AND (category!='pen' OR EXISTS(SELECT 1 FROM nib_types n WHERE n.name=products.variant AND n.active=1))) THEN 1 ELSE 0 END").bind(i.id,i.catalogVersion,i.price));}
+export function catalogGuards(env,items){return items.flatMap(i=>[
+ env.DB.prepare("INSERT INTO catalog_checks(ok) SELECT CASE WHEN EXISTS(SELECT 1 FROM products WHERE sku=? AND version=? AND active=1 AND price=? AND (category!='pen' OR EXISTS(SELECT 1 FROM nib_types n WHERE n.name=products.variant AND n.active=1))) THEN 1 ELSE 0 END").bind(i.id,i.catalogVersion,i.price),
+ ...(i.stockComponents||[]).map(p=>env.DB.prepare('INSERT INTO catalog_checks(ok) SELECT CASE WHEN EXISTS(SELECT 1 FROM products p JOIN product_families f ON f.family=p.family WHERE p.sku=? AND p.version=? AND p.active=1 AND f.confirmed=1 AND f.stock_sku=?) THEN 1 ELSE 0 END').bind(p.id,p.version,p.stockId))
+ ]);}
 export async function publicCommerce(request,env,url){
  if(url.pathname.startsWith('/media/')&&request.method==='GET'){
   const id=url.pathname.slice(7);if(!/^[a-f0-9]{64}$/.test(id))return new Response(null,{status:404});
@@ -58,7 +64,7 @@ export async function publicCommerce(request,env,url){
   if(url.searchParams.get('category')){query+=" AND (p.category=? OR EXISTS(SELECT 1 FROM product_categories pc JOIN categories c ON c.id=pc.category_id WHERE pc.sku=p.sku AND (c.id=? OR c.parent=?)))";const c=str(url.searchParams.get('category'),100);params.push(c,c,c);}
   if(url.searchParams.get('q')){const q=str(url.searchParams.get('q'),100).toLowerCase(),names=Object.entries(productTranslations).filter(([source,en])=>source.length<=100&&!source.includes('\n')&&en.toLowerCase().includes(q)).map(([source])=>source);query+=" AND (p.name LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\'"+(names.length?' OR p.name IN ('+names.map(()=>'?').join(',')+')':'')+')';params.push(pattern(url),pattern(url),...names);}
   if(!url.searchParams.get('sku')&&!url.searchParams.get('family'))query+=' GROUP BY p.family HAVING p.sku=min(p.sku)';
-  params.push((page(url)-1)*24);const result=await rows(env,query+' ORDER BY p.name,p.sku LIMIT 25 OFFSET ?',...params);return{products:result.slice(0,24).map(publicProduct),hasMore:result.length>24};
+  params.push((page(url)-1)*24);const result=await rows(env,query+' ORDER BY p.name,p.sku LIMIT 25 OFFSET ?',...params);return{products:await Promise.all(result.slice(0,24).map(async p=>publicProduct(await bundleAvailability(env,p)))),hasMore:result.length>24};
  }return null;
 }
 async function upload(request,env){
@@ -79,7 +85,7 @@ export async function manageCommerce(request,env,url,m,body){
  if(path==='/api/admin/images'&&method==='POST')return upload(request,env);
  if(path==='/api/admin/products'&&method==='GET'){
   await englishSchema(env);
-  const r=await rows(env,"SELECT p.*,(SELECT category_id FROM product_categories WHERE sku=p.sku) AS category_id,i.available,i.sold"+englishColumns+" FROM products p LEFT JOIN product_english e ON e.sku=p.sku JOIN product_families f ON f.family=p.family JOIN inventory i ON i.sku=f.stock_sku WHERE (p.name LIKE ? ESCAPE '\\' OR p.sku LIKE ? ESCAPE '\\') ORDER BY p.updated_at DESC,p.sku LIMIT 21 OFFSET ?",pattern(url),pattern(url),(page(url)-1)*20);return{products:r.slice(0,20).map(p=>({...publicProduct(p),active:p.active,sold:p.sold})),hasMore:r.length>20};
+  const r=await rows(env,"SELECT p.*,(SELECT category_id FROM product_categories WHERE sku=p.sku) AS category_id,i.available,i.sold"+englishColumns+" FROM products p LEFT JOIN product_english e ON e.sku=p.sku JOIN product_families f ON f.family=p.family JOIN inventory i ON i.sku=f.stock_sku WHERE (p.name LIKE ? ESCAPE '\\' OR p.sku LIKE ? ESCAPE '\\') ORDER BY p.updated_at DESC,p.sku LIMIT 21 OFFSET ?",pattern(url),pattern(url),(page(url)-1)*20);return{products:await Promise.all(r.slice(0,20).map(async p=>({...publicProduct(await bundleAvailability(env,p)),active:p.active,sold:p.sold}))),hasMore:r.length>20};
  }
  if(path==='/api/admin/product'&&method==='POST'){
   await englishSchema(env);

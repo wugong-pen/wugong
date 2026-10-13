@@ -1,3 +1,4 @@
+import {stockCounts} from './product-bundles.js';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 export async function expireReservations(env){
  const stamp=new Date().toISOString();
@@ -11,11 +12,11 @@ export async function expireReservations(env){
  ]);
 }
 export async function checkStock(env,items){
- const counts=new Map();for(const i of items)counts.set(i.stockId||i.id,(counts.get(i.stockId||i.id)||0)+i.quantity);
+ const counts=stockCounts(items);
  for(const [sku,count] of counts){const row=await env.DB.prepare('SELECT available FROM inventory WHERE sku=?').bind(sku).first();if(!row||row.available<count)fail(409,'商品庫存不足，請調整數量後再試');}
 }
 export function reserveStatements(env,number,items,payment){
- const counts=new Map();for(const i of items)counts.set(i.stockId||i.id,(counts.get(i.stockId||i.id)||0)+i.quantity);
+ const counts=stockCounts(items);
  return [env.DB.prepare("INSERT INTO checkout_reservations(order_number,state,expires_at) VALUES (?,'held',?)").bind(number,new Date(Date.now()+(payment==='bank'?3*86400000:30*60000)).toISOString()),...Array.from(counts,([sku,count])=>[
   // A failed quantity CHECK rolls back every statement in the D1 transaction.
   env.DB.prepare('INSERT INTO checkout_lines(order_number,sku,quantity) VALUES (?,?,CASE WHEN (SELECT available FROM inventory WHERE sku=?)>=? THEN ? ELSE 0 END)').bind(number,sku,sku,count,count),
